@@ -1,0 +1,14 @@
+{
+  // Typecheck do script Node standalone (scripts/keys.ts). Fica separado do
+  // tsconfig do Worker porque o ambiente e outro: aqui valem os tipos do Node
+  // (process, fs, crypto), nao os do Cloudflare Workers. Misturar os dois
+  // conjuntos de globals gera conflito de identificadores.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"],
+    // O script importa src/lib/hash.ts com a extensao .ts (o Node faz o strip de
+    // tipos em runtime). allowImportingTsExtensions permite isso no typecheck.
+    "allowImportingTsExtensions": true
+  },
+  "include": ["scripts/**/*.ts", "src/lib/hash.ts"]
+}

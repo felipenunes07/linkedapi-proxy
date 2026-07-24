@@ -3,6 +3,8 @@ import type { Env, Variables } from './types';
 import { authMiddleware } from './middleware/auth';
 import { rateLimit, recordUsage } from './middleware/rateLimit';
 import { sendMessage, sendInvitation, listChats } from './lib/unipile';
+import openapi from '../openapi.json';
+import { docsHtml } from './lib/docs';
 
 // Data plane: o proxy. Pipeline por request:
 //   autenticar chave -> resolver tenant + account_id (server-side)
@@ -13,6 +15,14 @@ import { sendMessage, sendInvitation, listChats } from './lib/unipile';
 const app = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 app.get('/health', (c) => c.json({ ok: true }));
+
+// Documentacao publica (sem auth). E a superficie que a pessoa de teste abre
+// para usar "a nossa API" sozinha. A spec e curada em openapi.json e NAO cita
+// Unipile/DSN/account_id (regra de ouro do Marco 5).
+//   GET /openapi.json -> a spec crua (Scalar consome daqui)
+//   GET /docs         -> HTML do Scalar apontando para /openapi.json
+app.get('/openapi.json', (c) => c.json(openapi));
+app.get('/docs', (c) => c.html(docsHtml));
 
 // Rotas protegidas da V1 (implementar por marco).
 const v1 = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -49,7 +59,7 @@ v1.post('/messages', async (c) => {
   if (!res.ok) {
     // Normaliza o erro. Nao repassa corpo/detail cru da Unipile (pode carregar
     // DSN/host/account_id da conta-mestra). So o status upstream, que e inocuo.
-    return c.json({ error: 'unipile_error', upstream_status: res.status }, 502);
+    return c.json({ error: 'upstream_error', upstream_status: res.status }, 502);
   }
 
   // Escrita aceita: conta a cota so agora (nao penaliza 400/502).
@@ -94,7 +104,7 @@ v1.post('/invitations', async (c) => {
   if (!res.ok) {
     // So o status upstream, nunca o corpo cru da Unipile (pode carregar
     // DSN/host/account_id da conta-mestra). Mesma politica de /messages.
-    return c.json({ error: 'unipile_error', upstream_status: res.status }, 502);
+    return c.json({ error: 'upstream_error', upstream_status: res.status }, 502);
   }
 
   // Convite aceito: conta a cota so agora (nao penaliza 400/502).
@@ -116,7 +126,7 @@ v1.get('/chats', async (c) => {
   });
 
   if (!res.ok) {
-    return c.json({ error: 'unipile_error', upstream_status: res.status }, 502);
+    return c.json({ error: 'upstream_error', upstream_status: res.status }, 502);
   }
 
   const data: unknown = await res.json();

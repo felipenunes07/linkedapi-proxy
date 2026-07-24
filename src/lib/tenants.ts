@@ -1,5 +1,11 @@
 import type { Env, Tenant } from '../types';
 import { supabaseSelect } from './supabase';
+import { hashApiKey } from './hash';
+
+// Re-exportado por compatibilidade: o hash agora vive em ./hash (compartilhado
+// com o script de emissao de chave). Quem ja importava hashApiKey daqui continua
+// funcionando.
+export { hashApiKey };
 
 // Resolucao de tenant e account_id. Esta e a fronteira de seguranca #1:
 // a unica origem legitima do account_id e a cadeia
@@ -75,16 +81,4 @@ export async function resolveTenant(
   }
 
   return { tenantId, unipileAccountId };
-}
-
-// Hash da API key. Guardamos apenas o hash; comparamos por hash. A chave em
-// claro tem alta entropia (gerada aleatoriamente na criacao), entao SHA-256 e
-// adequado aqui. Se um dia a chave passar a ter baixa entropia, trocar por HMAC
-// com salt do servidor.
-export async function hashApiKey(apiKey: string): Promise<string> {
-  const data = new TextEncoder().encode(apiKey);
-  const digest = await crypto.subtle.digest('SHA-256', data);
-  return [...new Uint8Array(digest)]
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
 }

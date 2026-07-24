@@ -1,0 +1,251 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "LinkedAPI",
+    "version": "1.0.0",
+    "description": "API para automacao de LinkedIn. Autentique com sua chave no header `X-API-KEY` e use os endpoints abaixo para enviar mensagens, enviar convites e listar suas conversas.\n\nA conta de LinkedIn usada em cada chamada e determinada pela sua chave, voce nao precisa (nem pode) informa-la no request.\n\nToda resposta de sucesso vem no envelope `{ \"ok\": true, \"data\": ... }`. Erros vem como `{ \"error\": \"<codigo>\" }`, com campos extras conforme o caso."
+  },
+  "servers": [
+    {
+      "url": "https://api.linkedapi.com.br",
+      "description": "Producao (substitua pela URL informada junto com sua chave)"
+    },
+    {
+      "url": "http://localhost:8787",
+      "description": "Ambiente local de desenvolvimento"
+    }
+  ],
+  "security": [{ "apiKey": [] }],
+  "tags": [
+    { "name": "Mensagens", "description": "Enviar mensagens em conversas existentes." },
+    { "name": "Convites", "description": "Enviar convites de conexao." },
+    { "name": "Conversas", "description": "Listar suas conversas." }
+  ],
+  "paths": {
+    "/v1/messages": {
+      "post": {
+        "tags": ["Mensagens"],
+        "summary": "Enviar mensagem",
+        "description": "Envia uma mensagem de texto em uma conversa que ja existe. Use `GET /v1/chats` para obter o `chat_id`.",
+        "operationId": "sendMessage",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/SendMessageRequest" },
+              "example": { "chat_id": "abc123", "text": "Ola! Tudo bem?" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Mensagem enviada.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/SuccessEnvelope" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "502": { "$ref": "#/components/responses/UpstreamError" }
+        }
+      }
+    },
+    "/v1/invitations": {
+      "post": {
+        "tags": ["Convites"],
+        "summary": "Enviar convite",
+        "description": "Envia um convite de conexao para um destinatario. O `provider_id` e o identificador do destinatario no LinkedIn.",
+        "operationId": "sendInvitation",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/SendInvitationRequest" },
+              "example": {
+                "provider_id": "ACoAAB1234567890",
+                "message": "Oi! Gostaria de conectar."
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Convite enviado.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/SuccessEnvelope" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "502": { "$ref": "#/components/responses/UpstreamError" }
+        }
+      }
+    },
+    "/v1/chats": {
+      "get": {
+        "tags": ["Conversas"],
+        "summary": "Listar conversas",
+        "description": "Lista suas conversas. Use o `id` de cada conversa como `chat_id` ao enviar mensagens. Suporta paginacao por cursor.",
+        "operationId": "listChats",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Numero maximo de conversas a retornar.",
+            "schema": { "type": "integer", "minimum": 1 }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Cursor de paginacao retornado por uma chamada anterior.",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Lista de conversas.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/SuccessEnvelope" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "502": { "$ref": "#/components/responses/UpstreamError" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "apiKey": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-KEY",
+        "description": "Sua chave de API, no formato `lk_live_...`. Enviada em toda requisicao no header `X-API-KEY`."
+      }
+    },
+    "schemas": {
+      "SendMessageRequest": {
+        "type": "object",
+        "required": ["chat_id", "text"],
+        "additionalProperties": false,
+        "properties": {
+          "chat_id": {
+            "type": "string",
+            "description": "Id da conversa existente (obtido em `GET /v1/chats`)."
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Conteudo da mensagem."
+          }
+        }
+      },
+      "SendInvitationRequest": {
+        "type": "object",
+        "required": ["provider_id"],
+        "additionalProperties": false,
+        "properties": {
+          "provider_id": {
+            "type": "string",
+            "description": "Identificador do destinatario no LinkedIn."
+          },
+          "message": {
+            "type": "string",
+            "description": "Mensagem opcional que acompanha o convite."
+          }
+        }
+      },
+      "SuccessEnvelope": {
+        "type": "object",
+        "required": ["ok", "data"],
+        "properties": {
+          "ok": { "type": "boolean", "const": true },
+          "data": {
+            "description": "Payload da operacao. A forma varia por endpoint.",
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "ErrorEnvelope": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "Codigo do erro, legivel por maquina."
+          },
+          "upstream_status": {
+            "type": "integer",
+            "description": "Presente em erros 502: o status HTTP recebido do sistema por tras da API."
+          }
+        }
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "Requisicao invalida (campo obrigatorio ausente ou JSON malformado).",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/ErrorEnvelope" },
+            "examples": {
+              "missing_field": { "value": { "error": "missing_chat_id" } },
+              "invalid_json": { "value": { "error": "invalid_json" } }
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "Chave ausente, invalida ou revogada.",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/ErrorEnvelope" },
+            "examples": {
+              "missing_api_key": { "value": { "error": "missing_api_key" } },
+              "invalid_api_key": { "value": { "error": "invalid_api_key" } }
+            }
+          }
+        }
+      },
+      "RateLimited": {
+        "description": "Limite diario da acao atingido. Aguarde a virada da janela (header `Retry-After` traz os segundos restantes).",
+        "headers": {
+          "Retry-After": {
+            "description": "Segundos ate a proxima janela.",
+            "schema": { "type": "integer" }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/ErrorEnvelope" },
+            "example": {
+              "error": "rate_limited",
+              "action": "messages",
+              "limit": 80,
+              "retry_after": 3600
+            }
+          }
+        }
+      },
+      "UpstreamError": {
+        "description": "A API esta no ar, mas a operacao falhou no sistema por tras dela. `upstream_status` traz o status recebido.",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/ErrorEnvelope" },
+            "example": { "error": "upstream_error", "upstream_status": 500 }
+          }
+        }
+      }
+    }
+  }
+}
