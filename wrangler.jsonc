@@ -1,0 +1,23 @@
+{
+  // Config do Cloudflare Worker (data plane / proxy).
+  // Segredos (UNIPILE_MASTER_TOKEN, UNIPILE_DSN, SUPABASE_*) NAO ficam aqui.
+  // Em dev: `.dev.vars`. Em producao: `npx wrangler secret put <NOME>`.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "linkedapi-proxy",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+
+  // Rate limit por chave por janela. Descomente ao implementar (Marco 3).
+  // "kv_namespaces": [
+  //   { "binding": "RATE_LIMIT", "id": "<criar-com-wrangler-kv-namespace-create>" }
+  // ],
+
+  // Variaveis NAO secretas podem ir em "vars". Segredos, nunca.
+  "vars": {
+    "ENVIRONMENT": "development"
+  }
+}

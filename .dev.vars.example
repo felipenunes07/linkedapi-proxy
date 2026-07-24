@@ -1,0 +1,19 @@
+# Copie este arquivo para `.dev.vars` e preencha com valores reais.
+# `.dev.vars` esta no .gitignore e NUNCA deve ser versionado.
+# Em producao, use `npx wrangler secret put <NOME>` (nao este arquivo).
+
+# Credenciais da conta-mestra Unipile (segredo, so no servidor)
+UNIPILE_DSN="apiXXX.unipile.com:XXXXX"
+UNIPILE_MASTER_TOKEN="cole-aqui-o-master-token"
+
+# account_id da conta de LinkedIn de teste, seedado para o Marco 1
+# (no Marco 2 isso passa a vir do Supabase, nao daqui)
+UNIPILE_ACCOUNT_ID="cole-aqui-o-account-id-da-conta-de-teste"
+
+# Supabase (service role fica so no servidor; nunca no cliente)
+SUPABASE_URL="https://xxxx.supabase.co"
+SUPABASE_SERVICE_ROLE_KEY="cole-aqui-a-service-role-key"
+
+# Rate limit via Upstash Redis (alternativa ao Cloudflare KV)
+# UPSTASH_REDIS_REST_URL=""
+# UPSTASH_REDIS_REST_TOKEN=""

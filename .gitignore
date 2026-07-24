@@ -1,0 +1,25 @@
+# Dependencias
+node_modules/
+
+# Segredos (NUNCA versionar)
+.dev.vars
+.env
+.env.*
+!.env.example
+secrets/
+*.key
+*.pem
+
+# Cloudflare / Wrangler
+.wrangler/
+dist/
+
+# Claude Code (overrides pessoais)
+.claude/settings.local.json
+CLAUDE.local.md
+
+# Build / cache
+*.log
+.DS_Store
+coverage/
+.vitest/
