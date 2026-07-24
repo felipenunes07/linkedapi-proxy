@@ -1,5 +1,6 @@
--- RASCUNHO. Revisar e ajustar no Marco 2 antes de aplicar.
--- Modelo de dados minimo da V1 para provar isolamento multi-tenant (PRD secao 8).
+-- Migration 0001. Modelo de dados minimo da V1 para provar isolamento
+-- multi-tenant (PRD secao 8). Aplicada no Marco 2 no projeto Supabase
+-- `linkedapi-proxy` (sa-east-1).
 
 create extension if not exists "pgcrypto";
 
@@ -33,14 +34,19 @@ create table if not exists connected_accounts (
 create index if not exists connected_accounts_tenant_idx
   on connected_accounts(tenant_id);
 
--- RLS: defesa em profundidade. O Worker usa a service role key (que contorna
--- RLS), entao o codigo TAMBEM deve filtrar por tenant_id sempre. As policies
--- abaixo protegem qualquer acesso que passe pelo papel autenticado do Postgres.
+-- RLS: defesa em profundidade. O Worker fala com o banco SO pela service role
+-- key (que contorna a RLS), e o codigo TAMBEM filtra por tenant_id sempre.
+-- Estrategia de isolamento escolhida: nenhum acesso pelos papeis publicos
+-- (anon/authenticated). RLS ligada + zero policy permissiva = deny total para
+-- esses papeis; e revogamos os grants padrao do Supabase por garantia.
 alter table tenants enable row level security;
 alter table api_keys enable row level security;
 alter table connected_accounts enable row level security;
 
--- TODO(Marco 2): definir as policies conforme a estrategia de isolamento
--- escolhida (ex.: claim de tenant no JWT, ou acesso so via service role no
--- Worker com filtro explicito por tenant_id). Nao deixar as tabelas sem policy
--- e acessiveis pelo papel anon.
+-- Sem nenhuma policy, RLS nega tudo para papeis nao-superusuario. Reforcamos
+-- revogando os privilegios que o Supabase concede por padrao a anon/authenticated.
+-- Assim, mesmo que alguem crie uma policy permissiva por engano no futuro, os
+-- grants de tabela ja nao existem para esses papeis.
+revoke all on tenants from anon, authenticated;
+revoke all on api_keys from anon, authenticated;
+revoke all on connected_accounts from anon, authenticated;

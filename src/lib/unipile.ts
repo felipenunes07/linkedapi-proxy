@@ -20,6 +20,26 @@ export function unipileFetch(
   return fetch(url, { ...init, headers });
 }
 
-// TODO(Marco 1): enviar mensagem em chat existente.
+// Enviar mensagem em chat existente.
+//   POST /api/v1/chats/{chat_id}/messages  (multipart/form-data, campo `text`)
+// O `account_id` e opcional na Unipile e serve de guard: impede enviar em um
+// chat que nao pertence a esta conta. Nós o injetamos SEMPRE, com o valor
+// resolvido do tenant (server-side), nunca com o que veio do request.
+export function sendMessage(
+  env: Env,
+  chatId: string,
+  text: string,
+  accountId: string,
+): Promise<Response> {
+  const form = new FormData();
+  form.set('text', text);
+  form.set('account_id', accountId);
+  // Nao setar content-type: o FormData define multipart + boundary sozinho.
+  return unipileFetch(env, `/chats/${encodeURIComponent(chatId)}/messages`, {
+    method: 'POST',
+    body: form,
+  });
+}
+
 // TODO(Marco 3): enviar convite de conexao; listar chats.
 // O account_id sempre entra a partir do tenant resolvido (nunca do request).

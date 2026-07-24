@@ -1,22 +1,67 @@
 import type { Env, Tenant } from '../types';
+import { supabaseSelect } from './supabase';
 
 // Resolucao de tenant e account_id. Esta e a fronteira de seguranca #1:
 // a unica origem legitima do account_id e a cadeia
 //   API key -> api_keys.tenant_id -> connected_accounts.unipile_account_id
 // NUNCA o request do cliente.
+//
+// Marco 2: implementado contra o Supabase (PostgREST + service role).
+// - hasheia a apiKey recebida e busca em api_keys (status ativo)
+// - carrega a connected_account do tenant (provider linkedin, ativa)
+// - retorna null se a chave for invalida/revogada ou nao houver conta
 
-// TODO(Marco 2): implementar de verdade contra o Supabase.
-// - hashear a apiKey recebida e buscar em api_keys (status ativo)
-// - carregar connected_accounts do tenant (provider = 'linkedin', ativo)
-// - retornar null se a chave for invalida/revogada
-export async function resolveTenant(
-  _env: Env,
-  _apiKey: string,
-): Promise<Tenant | null> {
-  throw new Error('resolveTenant nao implementado (ver spec Marco 2)');
+interface ApiKeyRow {
+  tenant_id: string;
 }
 
-// Hash da API key. Guardamos apenas o hash; comparamos por hash.
+interface ConnectedAccountRow {
+  unipile_account_id: string;
+}
+
+export async function resolveTenant(
+  env: Env,
+  apiKey: string,
+): Promise<Tenant | null> {
+  const keyHash = await hashApiKey(apiKey);
+
+  // Chave -> tenant. Guardamos so o hash; comparamos por hash.
+  const keys = await supabaseSelect<ApiKeyRow>(env, 'api_keys', {
+    key_hash: `eq.${keyHash}`,
+    status: 'eq.active',
+    select: 'tenant_id',
+    limit: '1',
+  });
+  const tenantId = keys[0]?.tenant_id;
+  if (!tenantId) {
+    return null;
+  }
+
+  // Tenant -> account_id. Filtra por tenant_id no codigo (defesa em
+  // profundidade), mesmo a service role contornando a RLS.
+  const accounts = await supabaseSelect<ConnectedAccountRow>(
+    env,
+    'connected_accounts',
+    {
+      tenant_id: `eq.${tenantId}`,
+      provider: 'eq.linkedin',
+      status: 'eq.active',
+      select: 'unipile_account_id',
+      limit: '1',
+    },
+  );
+  const unipileAccountId = accounts[0]?.unipile_account_id;
+  if (!unipileAccountId) {
+    return null;
+  }
+
+  return { tenantId, unipileAccountId };
+}
+
+// Hash da API key. Guardamos apenas o hash; comparamos por hash. A chave em
+// claro tem alta entropia (gerada aleatoriamente na criacao), entao SHA-256 e
+// adequado aqui. Se um dia a chave passar a ter baixa entropia, trocar por HMAC
+// com salt do servidor.
 export async function hashApiKey(apiKey: string): Promise<string> {
   const data = new TextEncoder().encode(apiKey);
   const digest = await crypto.subtle.digest('SHA-256', data);

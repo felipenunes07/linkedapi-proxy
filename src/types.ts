@@ -7,11 +7,19 @@ export interface Env {
   // Segredos (Worker secrets / .dev.vars) - nunca expor ao cliente
   UNIPILE_DSN: string;
   UNIPILE_MASTER_TOKEN: string;
+  // Supabase: a service role key contorna a RLS; vive so no servidor.
   SUPABASE_URL: string;
   SUPABASE_SERVICE_ROLE_KEY: string;
 
   // Rate limit (Marco 3) - descomentar o binding no wrangler.jsonc
   // RATE_LIMIT: KVNamespace;
+}
+
+// Corpo aceito por POST /v1/messages. IMPORTANT: nao ha campo account_id aqui;
+// se o cliente mandar um, e ignorado (o valor real vem do tenant, no servidor).
+export interface SendMessageRequest {
+  chat_id: string;
+  text: string;
 }
 
 // Tenant resolvido a partir da API key autenticada.
