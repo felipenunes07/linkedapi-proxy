@@ -41,5 +41,44 @@ export function sendMessage(
   });
 }
 
-// TODO(Marco 3): enviar convite de conexao; listar chats.
-// O account_id sempre entra a partir do tenant resolvido (nunca do request).
+// Enviar convite de conexao no LinkedIn.
+//   POST /api/v1/users/invite  (application/json)
+//   body: { provider_id, account_id, message? }
+// `provider_id` e o id interno do destinatario (o cliente resolve isso na
+// Unipile). O `account_id` e SEMPRE o do tenant, injetado aqui no servidor:
+// e a conta a partir da qual o convite parte.
+export function sendInvitation(
+  env: Env,
+  providerId: string,
+  accountId: string,
+  message?: string,
+): Promise<Response> {
+  const body: Record<string, string> = {
+    provider_id: providerId,
+    account_id: accountId,
+  };
+  if (message !== undefined) {
+    body.message = message;
+  }
+  return unipileFetch(env, '/users/invite', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+// Listar chats de uma conta.
+//   GET /api/v1/chats?account_id=...&limit=...&cursor=...
+// Filtramos SEMPRE pelo account_id do tenant (server-side): a conta-mestra tem
+// varias contas conectadas, e sem esse filtro o tenant veria chats de outros.
+// `limit`/`cursor` sao repassados como vieram (paginacao), nunca o account_id.
+export function listChats(
+  env: Env,
+  accountId: string,
+  opts: { limit?: string; cursor?: string } = {},
+): Promise<Response> {
+  const qs = new URLSearchParams({ account_id: accountId });
+  if (opts.limit !== undefined) qs.set('limit', opts.limit);
+  if (opts.cursor !== undefined) qs.set('cursor', opts.cursor);
+  return unipileFetch(env, `/chats?${qs.toString()}`, { method: 'GET' });
+}

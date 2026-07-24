@@ -45,10 +45,35 @@ motivo. Detalhe completo em @PRD.md secao 3 e 5.
 | M2.6 | Erro upstream ao cliente: so `{ error, upstream_status }`, sem `detail` | `detail`/corpo da Unipile pode carregar DSN/host/account_id da conta-mestra. Endurecimento pos security-reviewer (era M1.6). | Firme |
 
 ### Follow-ups conscientes do Marco 2 (nao bloqueiam, resolver antes de clientes reais)
-- Rate limit ainda no-op (Marco 3): `POST /v1/messages` ja escreve na Unipile sem throttle. Regra inviolavel #4.
-- `tenants.status` nao e checado na resolucao: suspender um tenant hoje so tem efeito via `connected_accounts.status`. Adicionar filtro por status do tenant.
+- ~~Rate limit ainda no-op~~ RESOLVIDO no Marco 3 (M3.4/M3.5). Escrita agora passa pelo contador.
+- ~~`tenants.status` nao e checado na resolucao~~ RESOLVIDO no Marco 3 (M3.6).
 - Posse do `chat_id`: o isolamento de conversa depende de a Unipile rejeitar `chat_id` de outra conta (guard via account_id). Confirmar com teste de integracao real.
-- Resposta de sucesso repassa o corpo da Unipile (`data`); projetar so os campos da nossa API (ex.: `message_id`).
+- Resposta de sucesso repassa o corpo da Unipile (`data`); projetar so os campos da nossa API (ex.: `message_id`). Vale tambem para `/chats` e `/invitations` (Marco 3 manteve o repasse por consistencia).
+
+## Marco 3 (3 endpoints + rate limit) - decisoes e aprendizados
+
+| # | Decisao | Porque | Status |
+|---|---|---|---|
+| M3.1 | 3 endpoints V1: `POST /v1/messages`, `POST /v1/invitations`, `GET /v1/chats` | Escopo fechado da V1 (D6). Todos resolvem `account_id` server-side. | Firme |
+| M3.2 | Convite: `POST /api/v1/users/invite` (JSON), campos `provider_id` + `account_id` + `message?` | Confirmado na doc da Unipile (invite-users). `account_id` sempre do tenant; `provider_id` vem do cliente (destinatario). | Firme |
+| M3.3 | Listar chats: `GET /api/v1/chats?account_id=...&limit&cursor` | Filtro por `account_id` server-side isola os chats do tenant. Repassamos so paginacao do cliente. | Firme |
+| M3.4 | Rate limit backend = Cloudflare KV (nao Upstash) | Nativo do Worker, zero dependencia externa, suficiente para limites diarios conservadores. Contrapartida: sem INCR atomico, leve overshoot sob concorrencia (aceitavel na V1). | Firme (trocar por Upstash se precisar contagem exata) |
+| M3.5 | Limites default por tenant/dia (UTC): mensagens **80/dia**, convites **30/dia** | Partindo dos recomendados pela Unipile (convites 80-100/dia e ~200/semana; mensagens ~100/dia). Ficamos abaixo de proposito: 30 convites/dia respeita tambem o teto semanal (~210 vs 200), 80 msgs deixa margem. | Firme (revisar por conta/plano) |
+| M3.6 | Estouro: 429 + header `Retry-After` (segundos ate a proxima meia-noite UTC), antes de chamar a Unipile | Cliente sabe quando tentar de novo; a acao restritiva nunca chega ao LinkedIn. | Firme |
+| M3.7 | Sem binding de KV = 500 (`rate_limit_unavailable`), nao fail-open | Regra #4: nao escrever na Unipile sem protecao ativa. Misconfiguracao falha alto. | Firme |
+| M3.8 | Rate limit so nas escritas (messages, invitations); `GET /chats` sem limite | Sao as acoes que restringem contas no LinkedIn. Leitura nao. | Firme |
+| M3.9 | `resolveTenant` checa `tenants.status = active` (query extra) antes de `connected_accounts` | Suspender um tenant passa a ter efeito imediato, sem mexer conta a conta. Resolve follow-up do Marco 2. | Firme |
+| M3.10 | Cota so incrementa em escrita ACEITA pela Unipile (`recordUsage` no handler), nao no middleware | O middleware so checa (429 se estourou, antes da Unipile). Contar antes da validacao deixava um 400/502 consumir cota (auto-DoS da propria cota com corpos invalidos). Achado do `security-reviewer`. | Firme |
+
+### Fatos de teste real (Marco 3, conta de teste)
+- Os 3 endpoints rodaram de ponta a ponta pelo Worker local contra a conta real
+  (tenant A -> `yHCreubMTFeaqS2TqK1k2A`), auth por `X-API-KEY` (hash em `api_keys`):
+  - `GET /v1/chats`: 200, todos os chats com `account_id` da conta do tenant (resolucao server-side ok).
+  - `POST /v1/messages` (alvo Arthur): 200, `message_id` retornado.
+  - `POST /v1/invitations` (alvo Mark Tomlet, sem nota): 200, `invitation_id` retornado.
+- Isolamento (borda real): `POST /v1/messages` com `chat_id` fora da conta -> Unipile 404 -> proxy responde `{error, upstream_status:404}` em 502, sem vazar corpo. O guard `account_id` server-side barra chats arbitrarios.
+- Caveat: o tenant B de teste aponta para uma conta placeholder (`acct-B-placeholder-nao-conectada`), nao um LinkedIn real. Por isso o teste cross-account com um `chat_id` real "do outro tenant" nao foi possivel no real; o isolamento cross-tenant continua provado pelos testes mockados (`test/isolation.test.ts`). Fechar com uma 2a conta real quando houver.
+- Chave/valores em claro e PII do teste NAO ficam aqui (arquivo versionado). Vivem no `.dev.vars` e nas memorias do projeto.
 
 ## Em aberto (ver PRD secao 12)
 - Nome/marca do produto e dominio da API.

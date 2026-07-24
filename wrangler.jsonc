@@ -11,10 +11,13 @@
     "enabled": true
   },
 
-  // Rate limit por chave por janela. Descomente ao implementar (Marco 3).
-  // "kv_namespaces": [
-  //   { "binding": "RATE_LIMIT", "id": "<criar-com-wrangler-kv-namespace-create>" }
-  // ],
+  // Rate limit por chave por janela (Marco 3). Em dev, `wrangler dev` simula o
+  // KV localmente (miniflare), o `id` abaixo e so placeholder. Antes do deploy,
+  // crie o namespace e troque o id:
+  //   npx wrangler kv namespace create RATE_LIMIT
+  "kv_namespaces": [
+    { "binding": "RATE_LIMIT", "id": "REPLACE_WITH_KV_NAMESPACE_ID" }
+  ],
 
   // Variaveis NAO secretas podem ir em "vars". Segredos, nunca.
   "vars": {

@@ -1,8 +1,8 @@
 import { Hono } from 'hono';
 import type { Env, Variables } from './types';
 import { authMiddleware } from './middleware/auth';
-import { rateLimitMiddleware } from './middleware/rateLimit';
-import { sendMessage } from './lib/unipile';
+import { rateLimit, recordUsage } from './middleware/rateLimit';
+import { sendMessage, sendInvitation, listChats } from './lib/unipile';
 
 // Data plane: o proxy. Pipeline por request:
 //   autenticar chave -> resolver tenant + account_id (server-side)
@@ -18,10 +18,10 @@ app.get('/health', (c) => c.json({ ok: true }));
 const v1 = new Hono<{ Bindings: Env; Variables: Variables }>();
 v1.use('*', authMiddleware);
 
-// TODO(Marco 3): POST /v1/invitations (enviar convite) + rate limit
-// TODO(Marco 3): GET  /v1/chats       (listar chats)
-v1.use('/messages', rateLimitMiddleware);
-v1.use('/invitations', rateLimitMiddleware);
+// Rate limit so nas acoes de escrita (restringem contas no LinkedIn). Listar
+// chats e leitura, sem limite. Cada acao tem seu proprio contador/limite.
+v1.use('/messages', rateLimit('messages'));
+v1.use('/invitations', rateLimit('invitations'));
 
 // POST /v1/messages: enviar mensagem em chat existente.
 // account_id NUNCA vem do corpo: usamos so o do tenant resolvido no servidor.
@@ -49,6 +49,73 @@ v1.post('/messages', async (c) => {
   if (!res.ok) {
     // Normaliza o erro. Nao repassa corpo/detail cru da Unipile (pode carregar
     // DSN/host/account_id da conta-mestra). So o status upstream, que e inocuo.
+    return c.json({ error: 'unipile_error', upstream_status: res.status }, 502);
+  }
+
+  // Escrita aceita: conta a cota so agora (nao penaliza 400/502).
+  await recordUsage(c.env.RATE_LIMIT, tenant.tenantId, 'messages');
+
+  const data: unknown = await res.json();
+  return c.json({ ok: true, data });
+});
+
+// POST /v1/invitations: enviar convite de conexao.
+// account_id NUNCA vem do corpo: usamos so o do tenant resolvido no servidor.
+v1.post('/invitations', async (c) => {
+  const tenant = c.get('tenant');
+
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'invalid_json' }, 400);
+  }
+
+  const { provider_id, message } = (body ?? {}) as Record<string, unknown>;
+  if (typeof provider_id !== 'string' || provider_id.length === 0) {
+    return c.json({ error: 'missing_provider_id' }, 400);
+  }
+  let msg: string | undefined;
+  if (message !== undefined) {
+    if (typeof message !== 'string') {
+      return c.json({ error: 'invalid_message' }, 400);
+    }
+    msg = message;
+  }
+
+  // Um account_id no corpo e ignorado de proposito (regra de isolamento).
+  const res = await sendInvitation(
+    c.env,
+    provider_id,
+    tenant.unipileAccountId,
+    msg,
+  );
+
+  if (!res.ok) {
+    // So o status upstream, nunca o corpo cru da Unipile (pode carregar
+    // DSN/host/account_id da conta-mestra). Mesma politica de /messages.
+    return c.json({ error: 'unipile_error', upstream_status: res.status }, 502);
+  }
+
+  // Convite aceito: conta a cota so agora (nao penaliza 400/502).
+  await recordUsage(c.env.RATE_LIMIT, tenant.tenantId, 'invitations');
+
+  const data: unknown = await res.json();
+  return c.json({ ok: true, data });
+});
+
+// GET /v1/chats: listar chats do tenant (para obter chat_id). Leitura, sem rate
+// limit. O filtro por account_id e server-side: o tenant so ve os proprios chats.
+v1.get('/chats', async (c) => {
+  const tenant = c.get('tenant');
+
+  // Repassamos so paginacao. account_id NUNCA vem do request.
+  const res = await listChats(c.env, tenant.unipileAccountId, {
+    limit: c.req.query('limit'),
+    cursor: c.req.query('cursor'),
+  });
+
+  if (!res.ok) {
     return c.json({ error: 'unipile_error', upstream_status: res.status }, 502);
   }
 

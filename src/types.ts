@@ -11,15 +11,29 @@ export interface Env {
   SUPABASE_URL: string;
   SUPABASE_SERVICE_ROLE_KEY: string;
 
-  // Rate limit (Marco 3) - descomentar o binding no wrangler.jsonc
-  // RATE_LIMIT: KVNamespace;
+  // Rate limit (Marco 3): contador por chave por janela. Binding declarado no
+  // wrangler.jsonc. Sem ele, as rotas de escrita respondem 500 (nao seguimos
+  // sem protecao, regra inviolavel #4).
+  RATE_LIMIT: KVNamespace;
 }
+
+// Acoes de escrita sujeitas a rate limit. Sao as que restringem contas no
+// LinkedIn (enviar mensagem, enviar convite). Listar chats e leitura, sem limite.
+export type RateLimitAction = 'messages' | 'invitations';
 
 // Corpo aceito por POST /v1/messages. IMPORTANT: nao ha campo account_id aqui;
 // se o cliente mandar um, e ignorado (o valor real vem do tenant, no servidor).
 export interface SendMessageRequest {
   chat_id: string;
   text: string;
+}
+
+// Corpo aceito por POST /v1/invitations. Igual a mensagem: nao ha account_id
+// aqui; o convite parte SEMPRE da conta do tenant resolvida no servidor.
+// `provider_id` e o id interno do destinatario no LinkedIn (via Unipile).
+export interface SendInvitationRequest {
+  provider_id: string;
+  message?: string;
 }
 
 // Tenant resolvido a partir da API key autenticada.

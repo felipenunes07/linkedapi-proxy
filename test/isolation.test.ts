@@ -31,6 +31,11 @@ vi.mock('../src/lib/supabase', () => ({
         if (filters.key_hash === `eq.${hashB}`) return [{ tenant_id: 'tB' }];
         return [];
       }
+      if (table === 'tenants') {
+        if (filters.id === 'eq.tA') return [{ id: 'tA' }];
+        if (filters.id === 'eq.tB') return [{ id: 'tB' }];
+        return [];
+      }
       if (table === 'connected_accounts') {
         if (filters.tenant_id === 'eq.tA')
           return [{ unipile_account_id: ACCT_A }];
@@ -56,6 +61,7 @@ vi.mock('../src/lib/unipile', () => ({
 
 import app from '../src/index';
 import { sendMessage } from '../src/lib/unipile';
+import { memoryKV } from './helpers';
 
 const env = {
   ENVIRONMENT: 'test',
@@ -63,6 +69,7 @@ const env = {
   UNIPILE_MASTER_TOKEN: 'master-token-nunca-vaza',
   SUPABASE_URL: 'https://fake.supabase.co',
   SUPABASE_SERVICE_ROLE_KEY: 'service-role-nunca-vaza',
+  RATE_LIMIT: memoryKV(),
 } as Env;
 
 function post(apiKey: string | null, body: unknown) {

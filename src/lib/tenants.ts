@@ -8,11 +8,17 @@ import { supabaseSelect } from './supabase';
 //
 // Marco 2: implementado contra o Supabase (PostgREST + service role).
 // - hasheia a apiKey recebida e busca em api_keys (status ativo)
+// - confirma que o tenant esta ativo (status), para suspensao ter efeito imediato
 // - carrega a connected_account do tenant (provider linkedin, ativa)
-// - retorna null se a chave for invalida/revogada ou nao houver conta
+// - retorna null se a chave for invalida/revogada, o tenant suspenso, ou nao
+//   houver conta
 
 interface ApiKeyRow {
   tenant_id: string;
+}
+
+interface TenantRow {
+  id: string;
 }
 
 interface ConnectedAccountRow {
@@ -34,6 +40,19 @@ export async function resolveTenant(
   });
   const tenantId = keys[0]?.tenant_id;
   if (!tenantId) {
+    return null;
+  }
+
+  // Tenant ativo? Uma chave valida de um tenant suspenso nao age. Suspender o
+  // tenant (status != active) passa a ter efeito imediato, sem precisar mexer
+  // em cada connected_account.
+  const tenants = await supabaseSelect<TenantRow>(env, 'tenants', {
+    id: `eq.${tenantId}`,
+    status: 'eq.active',
+    select: 'id',
+    limit: '1',
+  });
+  if (!tenants[0]) {
     return null;
   }
 

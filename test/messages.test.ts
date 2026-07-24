@@ -15,6 +15,8 @@ vi.mock('../src/lib/supabase', () => ({
       const hash = await hashApiKey(KEY);
       if (table === 'api_keys')
         return filters.key_hash === `eq.${hash}` ? [{ tenant_id: 't1' }] : [];
+      if (table === 'tenants')
+        return filters.id === 'eq.t1' ? [{ id: 't1' }] : [];
       if (table === 'connected_accounts')
         return filters.tenant_id === 'eq.t1'
           ? [{ unipile_account_id: ACCT }]
@@ -36,6 +38,7 @@ vi.mock('../src/lib/unipile', () => ({
 
 import app from '../src/index';
 import { sendMessage } from '../src/lib/unipile';
+import { memoryKV } from './helpers';
 
 const env = {
   ENVIRONMENT: 'test',
@@ -43,6 +46,7 @@ const env = {
   UNIPILE_MASTER_TOKEN: 'master-token-nunca-vaza',
   SUPABASE_URL: 'https://fake.supabase.co',
   SUPABASE_SERVICE_ROLE_KEY: 'service-role-nunca-vaza',
+  RATE_LIMIT: memoryKV(),
 } as Env;
 
 function post(apiKey: string | null, body: unknown) {
