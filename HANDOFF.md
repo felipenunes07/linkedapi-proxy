@@ -23,7 +23,8 @@ Todo o código da V1 **e da fase 2** está **pronto e verde**: typecheck +
 `security-reviewer`. O que falta é infraestrutura, contas externas e prova
 real: o projeto Supabase antigo sumiu do DNS, o Worker nunca foi deployado, e
 as provas ponta a ponta dependem disso. Lista viva do que está pendente:
-[docs/pendencias.md](docs/pendencias.md).
+[docs/pendencias.md](docs/pendencias.md); o recorte só do que **exige mão
+humana** (logins, contas, gente testando): [ACOES-HUMANAS.md](ACOES-HUMANAS.md).
 
 | Fase | Escopo | Status |
 |---|---|---|

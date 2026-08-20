@@ -2,7 +2,9 @@
 
 Lista viva. Tudo que esta aqui depende de infra, conta externa, decisao de
 negocio ou gente. O codigo correspondente ja esta pronto e testado; quando o
-item destravar, o roteiro executavel esta em [go-live.md](go-live.md).
+item destravar, o roteiro executavel esta em [go-live.md](go-live.md). O
+recorte so das acoes que exigem mao humana (quem faz, como, o que destrava)
+esta em [../ACOES-HUMANAS.md](../ACOES-HUMANAS.md).
 
 Atualizado em 2026-08-20.
 

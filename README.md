@@ -8,6 +8,9 @@ Onde estamos e o que falta: [HANDOFF.md](HANDOFF.md) e
 [docs/pendencias.md](docs/pendencias.md). Roteiro de ativacao:
 [docs/go-live.md](docs/go-live.md).
 
+> **O que precisa de MAO HUMANA para avancar: [ACOES-HUMANAS.md](ACOES-HUMANAS.md).**
+> Todo o resto ja e codigo pronto ou comando.
+
 ## Setup rapido
 
 ```bash
