@@ -67,6 +67,18 @@ export function sendInvitation(
   });
 }
 
+// Consultar uma conta conectada na conta-mestra.
+//   GET /api/v1/accounts/{account_id}
+// Usado pelo callback da auto-conexao (Marco 4) como verificacao: o notify da
+// hosted auth NAO tem assinatura documentada, entao nunca confiamos so no
+// payload. So vinculamos um account_id que a PROPRIA Unipile confirma existir
+// na nossa conta-mestra (e ser LINKEDIN).
+export function getAccount(env: Env, accountId: string): Promise<Response> {
+  return unipileFetch(env, `/accounts/${encodeURIComponent(accountId)}`, {
+    method: 'GET',
+  });
+}
+
 // Listar chats de uma conta.
 //   GET /api/v1/chats?account_id=...&limit=...&cursor=...
 // Filtramos SEMPRE pelo account_id do tenant (server-side): a conta-mestra tem

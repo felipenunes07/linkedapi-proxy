@@ -3,8 +3,14 @@ import type { Env, Variables } from './types';
 import { authMiddleware } from './middleware/auth';
 import { rateLimit, recordUsage } from './middleware/rateLimit';
 import { sendMessage, sendInvitation, listChats } from './lib/unipile';
+import {
+  sanitizeMessageSent,
+  sanitizeInvitationSent,
+  sanitizeChatList,
+} from './lib/sanitize';
 import openapi from '../openapi.json';
 import { docsHtml } from './lib/docs';
+import { connectHooks } from './routes/connect';
 
 // Data plane: o proxy. Pipeline por request:
 //   autenticar chave -> resolver tenant + account_id (server-side)
@@ -13,6 +19,14 @@ import { docsHtml } from './lib/docs';
 // Regras invioláveis em CLAUDE.md. Nao aceitar account_id do request.
 
 const app = new Hono<{ Bindings: Env; Variables: Variables }>();
+
+// Erro nao tratado: resposta no ErrorEnvelope da doc, nunca o texto padrao do
+// Hono. Log SO de name/message (as mensagens internas sao codigos sem segredo:
+// supabase_*_failed:<status> etc.); nunca o objeto/stack cru.
+app.onError((err, c) => {
+  console.error(`unhandled_error: ${err.name}: ${err.message}`);
+  return c.json({ error: 'internal_error' }, 500);
+});
 
 app.get('/health', (c) => c.json({ ok: true }));
 
@@ -23,6 +37,11 @@ app.get('/health', (c) => c.json({ ok: true }));
 //   GET /docs         -> HTML do Scalar apontando para /openapi.json
 app.get('/openapi.json', (c) => c.json(openapi));
 app.get('/docs', (c) => c.html(docsHtml));
+
+// Callback da auto-conexao (Marco 4). Rota publica SEM X-API-KEY: a seguranca
+// vem do connect_token de uso unico + verificacao upstream (ver routes/connect).
+// Nao entra no openapi.json: e infra, nao superficie do cliente.
+app.route('/hooks/connect', connectHooks);
 
 // Rotas protegidas da V1 (implementar por marco).
 const v1 = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -65,8 +84,10 @@ v1.post('/messages', async (c) => {
   // Escrita aceita: conta a cota so agora (nao penaliza 400/502).
   await recordUsage(c.env.RATE_LIMIT, tenant.tenantId, 'messages');
 
+  // Whitelist: so os campos da nossa API. O corpo cru da Unipile carrega
+  // account_id e metadados internos que nao saem daqui (white-label).
   const data: unknown = await res.json();
-  return c.json({ ok: true, data });
+  return c.json({ ok: true, data: sanitizeMessageSent(data) });
 });
 
 // POST /v1/invitations: enviar convite de conexao.
@@ -110,8 +131,9 @@ v1.post('/invitations', async (c) => {
   // Convite aceito: conta a cota so agora (nao penaliza 400/502).
   await recordUsage(c.env.RATE_LIMIT, tenant.tenantId, 'invitations');
 
+  // Whitelist: so os campos da nossa API (white-label, mesma politica de /messages).
   const data: unknown = await res.json();
-  return c.json({ ok: true, data });
+  return c.json({ ok: true, data: sanitizeInvitationSent(data) });
 });
 
 // GET /v1/chats: listar chats do tenant (para obter chat_id). Leitura, sem rate
@@ -129,8 +151,10 @@ v1.get('/chats', async (c) => {
     return c.json({ error: 'upstream_error', upstream_status: res.status }, 502);
   }
 
+  // Whitelist por item: o objeto de chat da Unipile carrega o account_id da
+  // conta-mestra; aqui so passam os campos de ChatSummary (white-label).
   const data: unknown = await res.json();
-  return c.json({ ok: true, data });
+  return c.json({ ok: true, data: sanitizeChatList(data) });
 });
 
 app.route('/v1', v1);

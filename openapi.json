@@ -42,7 +42,8 @@
             "description": "Mensagem enviada.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/SuccessEnvelope" }
+                "schema": { "$ref": "#/components/schemas/MessageSentEnvelope" },
+                "example": { "ok": true, "data": { "message_id": "msg_abc123" } }
               }
             }
           },
@@ -76,7 +77,8 @@
             "description": "Convite enviado.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/SuccessEnvelope" }
+                "schema": { "$ref": "#/components/schemas/InvitationSentEnvelope" },
+                "example": { "ok": true, "data": { "invitation_id": "inv_abc123" } }
               }
             }
           },
@@ -114,7 +116,23 @@
             "description": "Lista de conversas.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/SuccessEnvelope" }
+                "schema": { "$ref": "#/components/schemas/ChatListEnvelope" },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "items": [
+                      {
+                        "id": "chat_abc123",
+                        "name": "Fulano de Tal",
+                        "timestamp": "2026-08-01T12:34:56.000Z",
+                        "unread_count": 2,
+                        "archived": 0,
+                        "attendee_provider_id": "ACoAAB1234567890"
+                      }
+                    ],
+                    "cursor": null
+                  }
+                }
               }
             }
           },
@@ -165,16 +183,71 @@
           }
         }
       },
-      "SuccessEnvelope": {
+      "MessageSentEnvelope": {
         "type": "object",
         "required": ["ok", "data"],
         "properties": {
           "ok": { "type": "boolean", "const": true },
           "data": {
-            "description": "Payload da operacao. A forma varia por endpoint.",
             "type": "object",
-            "additionalProperties": true
+            "required": ["message_id"],
+            "properties": {
+              "message_id": {
+                "type": ["string", "null"],
+                "description": "Identificador da mensagem enviada."
+              }
+            }
           }
+        }
+      },
+      "InvitationSentEnvelope": {
+        "type": "object",
+        "required": ["ok", "data"],
+        "properties": {
+          "ok": { "type": "boolean", "const": true },
+          "data": {
+            "type": "object",
+            "required": ["invitation_id"],
+            "properties": {
+              "invitation_id": {
+                "type": ["string", "null"],
+                "description": "Identificador do convite enviado."
+              }
+            }
+          }
+        }
+      },
+      "ChatListEnvelope": {
+        "type": "object",
+        "required": ["ok", "data"],
+        "properties": {
+          "ok": { "type": "boolean", "const": true },
+          "data": {
+            "type": "object",
+            "required": ["items", "cursor"],
+            "properties": {
+              "items": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/ChatSummary" }
+              },
+              "cursor": {
+                "type": ["string", "null"],
+                "description": "Cursor para a proxima pagina. `null` quando nao ha mais resultados."
+              }
+            }
+          }
+        }
+      },
+      "ChatSummary": {
+        "type": "object",
+        "description": "Resumo de uma conversa. Use `id` como `chat_id` ao enviar mensagens; `attendee_provider_id` e o mesmo identificador aceito em `POST /v1/invitations`.",
+        "properties": {
+          "id": { "type": ["string", "null"], "description": "Id da conversa." },
+          "name": { "type": ["string", "null"], "description": "Nome da conversa/contato." },
+          "timestamp": { "type": ["string", "null"], "description": "Data/hora da ultima atividade (ISO 8601)." },
+          "unread_count": { "type": ["integer", "null"], "description": "Mensagens nao lidas." },
+          "archived": { "type": ["integer", "null"], "description": "1 se a conversa esta arquivada, 0 caso contrario." },
+          "attendee_provider_id": { "type": ["string", "null"], "description": "Identificador do contato no LinkedIn." }
         }
       },
       "ErrorEnvelope": {
@@ -188,6 +261,18 @@
           "upstream_status": {
             "type": "integer",
             "description": "Presente em erros 502: o status HTTP recebido do sistema por tras da API."
+          },
+          "action": {
+            "type": "string",
+            "description": "Presente em erros 429: a acao cujo limite foi atingido."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Presente em erros 429: o limite diario da acao."
+          },
+          "retry_after": {
+            "type": "integer",
+            "description": "Presente em erros 429: segundos ate a proxima janela (igual ao header Retry-After)."
           }
         }
       }

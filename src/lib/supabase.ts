@@ -33,3 +33,63 @@ export async function supabaseSelect<T>(
 
   return (await res.json()) as T[];
 }
+
+// INSERT tipado. Retorna as linhas criadas (Prefer: return=representation).
+// Usado pelo callback da auto-conexao (Marco 4) para gravar connected_accounts.
+// Mesma disciplina do select: quem chama e responsavel por passar o tenant_id
+// correto (aqui, o resolvido do connect_token, nunca de input do cliente).
+export async function supabaseInsert<T>(
+  env: Env,
+  table: string,
+  row: Record<string, unknown>,
+): Promise<T[]> {
+  const res = await fetch(`${env.SUPABASE_URL}/rest/v1/${table}`, {
+    method: 'POST',
+    headers: {
+      apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+      authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      'content-type': 'application/json',
+      accept: 'application/json',
+      prefer: 'return=representation',
+    },
+    body: JSON.stringify(row),
+  });
+
+  if (!res.ok) {
+    // 409 = violacao de unique (ex.: conta ja vinculada). Sem corpo cru.
+    throw new Error(`supabase_insert_failed:${res.status}`);
+  }
+
+  return (await res.json()) as T[];
+}
+
+// UPDATE (PATCH) tipado, com filtros PostgREST. Retorna as linhas alteradas.
+export async function supabaseUpdate<T>(
+  env: Env,
+  table: string,
+  filters: Record<string, string>,
+  patch: Record<string, unknown>,
+): Promise<T[]> {
+  const url = new URL(`${env.SUPABASE_URL}/rest/v1/${table}`);
+  for (const [key, value] of Object.entries(filters)) {
+    url.searchParams.set(key, value);
+  }
+
+  const res = await fetch(url.toString(), {
+    method: 'PATCH',
+    headers: {
+      apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+      authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      'content-type': 'application/json',
+      accept: 'application/json',
+      prefer: 'return=representation',
+    },
+    body: JSON.stringify(patch),
+  });
+
+  if (!res.ok) {
+    throw new Error(`supabase_update_failed:${res.status}`);
+  }
+
+  return (await res.json()) as T[];
+}

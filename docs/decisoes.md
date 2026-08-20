@@ -75,7 +75,34 @@ motivo. Detalhe completo em @PRD.md secao 3 e 5.
 - Caveat: o tenant B de teste aponta para uma conta placeholder (`acct-B-placeholder-nao-conectada`), nao um LinkedIn real. Por isso o teste cross-account com um `chat_id` real "do outro tenant" nao foi possivel no real; o isolamento cross-tenant continua provado pelos testes mockados (`test/isolation.test.ts`). Fechar com uma 2a conta real quando houver.
 - Chave/valores em claro e PII do teste NAO ficam aqui (arquivo versionado). Vivem no `.dev.vars` e nas memorias do projeto.
 
+## Endurecimento pre-clientes (2026-08-20)
+
+| # | Decisao | Porque | Status |
+|---|---|---|---|
+| E1 | Respostas de sucesso projetadas por WHITELIST (`src/lib/sanitize.ts`): messages -> `{message_id}`, invitations -> `{invitation_id}`, chats -> `{items[ChatSummary], cursor}` | O corpo cru da Unipile expunha o `unipile_account_id` do tenant e permitia fingerprinting do provedor. Campo desconhecido nunca passa. Resolve o follow-up do Marco 2. | Firme |
+| E2 | Scalar pinado (`@scalar/api-reference@1.65.1`) com SRI sha384 + crossorigin em /docs | /docs e onde o cliente cola a propria chave no playground; CDN comprometido nao pode virar script arbitrario. Ao atualizar a versao, recalcular o hash do arquivo exato. | Firme |
+| E3 | Migration 0002: unique em `connected_accounts.unipile_account_id` + CHECK nas colunas `status` das 3 tabelas | O banco garante sozinho que uma conta nunca aponta para dois tenants (pre-requisito do callback do Marco 4) e que typo nao cria estado invalido silencioso. | Firme |
+| E4 | Exemplo do 429 no openapi.json agora bate com o schema (ErrorEnvelope ganhou `action`/`limit`/`retry_after` opcionais) e cada 200 tem schema proprio | Doc publicada nao pode divergir do que a API responde. | Firme |
+
+## Marco 4 (auto-conexao) - decisoes e aprendizados
+
+| # | Decisao | Porque | Status |
+|---|---|---|---|
+| M4.1 | Link de hosted auth gerado por script do operador (`connect:link` / `connect:reconnect`), nao por rota autenticada | Superficie minima: nenhuma rota nova atras de chave (um tenant novo nem teria como autenticar: `resolveTenant` exige conta conectada). Self-service fica para a fase 2. | Firme (rever na fase 2) |
+| M4.2 | Correlacao por token opaco de uso unico no campo `name` do link; so o hash vai ao banco (`connect_tokens`, migration 0003); consumo por UPDATE condicional (pending -> used) ANTES de qualquer escrita | O notify NAO tem assinatura documentada; `name` e o mecanismo oficial de correlacao. Consumo atomico mata replay e corrida (achado do security-reviewer); token queimado em fluxo que falha depois e o comportamento seguro. 256 bits, validade 2h, `single_use: true`. | Firme |
+| M4.3 | Verificacao upstream com correlacao forte: `GET /accounts/{id}` precisa devolver tipo LINKEDIN e, no create, `name` IGUAL ao token; reconnect SO reativa a conta que o tenant ja tem; purpose do token amarrado ao status do notify | So `type === LINKEDIN` nao amarrava o account_id ao token: um notify forjado com token valido podia vincular conta alheia da conta-mestra (achado BLOQUEANTE do security-reviewer). Falha fechado; confirmar o campo `name` no primeiro teste real. | Firme |
+| M4.4 | Conflito cross-tenant: resposta 200 GENERICA (sem oraculo) + `console.error` so com o uuid do token; mesmo tenant: idempotente, reativa; conta `paused` NUNCA reativa por conexao/reconexao | Nunca re-vincular conta entre tenants; o unique do banco (E3) cobre corrida. 409 distinto vazava "essa conta existe e e de outro" a quem tem token. Pausa e decisao de negocio (inadimplencia), o wizard nao desfaz. | Firme |
+| M4.5 | `disabled_features`: `linkedin_recruiter`, `linkedin_sales_navigator`, `linkedin_organizations_mailboxes` | D7. A doc da hosted auth nao tem toggle especifico de "Jobs"; Recruiter/Sales Nav cobrem o caso real. | Firme |
+| M4.6 | Path do callback neutro (`/hooks/connect`) e fora do `openapi.json` | Regra de ouro do Marco 5: nenhuma superficie publica cita o vendor. | Firme |
+| M4.7 | Throttle no callback (KV, fail-closed): 5 tentativas/dia por token, 100/dia por IP, teto de 200 chars no `name`; sem KV, 500 | Rota publica que escreve no banco nao opera sem teto: cada tentativa custa query com service role e, com token valido, chamada a Unipile. Mesma postura fail-closed da regra #4. | Firme |
+| M4.8 | 1 seat = 1 conta: vincular conta nova desativa as demais ativas do tenant; `resolveTenant` ordena `created_at.desc` | Sem isso um segundo connect:link acumulava contas ativas e a chave do tenant agia por uma linha nao deterministica (PostgREST sem order). | Firme |
+| M4.9 | `app.onError` responde `{error: internal_error}` 500 e loga so `name: message` | Throw nao tratado caia no default do Hono (texto fora do ErrorEnvelope, log do objeto cru). Mensagens internas sao codigos sem segredo. | Firme |
+| M4.10 | `PUBLIC_BASE_URL` exige `https://` no script | O notify carrega o token em claro no corpo; nunca por http. | Firme |
+
 ## Em aberto (ver PRD secao 12)
-- Nome/marca do produto e dominio da API.
-- Valores default do rate limiter (partir dos recomendados pela Unipile).
-- Provedor de rate limit: Cloudflare KV vs Upstash Redis (decidir no Marco 3).
+- Registrar o dominio da API (`linkedapi.com.br`); nome LinkedAPI ja em uso nos docs.
+- ~~Valores default do rate limiter~~ RESOLVIDO no Marco 3 (M3.5: 80 msgs/dia, 30 convites/dia).
+- ~~Provedor de rate limit: KV vs Upstash~~ RESOLVIDO no Marco 3 (M3.4: Cloudflare KV).
+- Infra do banco: o projeto Supabase `voojvcdihyymewrhrlti` (M2.1) nao resolve mais no DNS
+  (pausado/deletado). Escolher/criar projeto novo e reapontar `SUPABASE_URL` +
+  aplicar migrations 0001-0003 antes da prova real dos Marcos 4 e 5.

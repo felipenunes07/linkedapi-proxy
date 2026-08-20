@@ -12,7 +12,9 @@
     "test:watch": "vitest",
     "cf-typegen": "wrangler types",
     "key:issue": "node scripts/keys.ts issue",
-    "key:revoke": "node scripts/keys.ts revoke"
+    "key:revoke": "node scripts/keys.ts revoke",
+    "connect:link": "node scripts/connect.ts link",
+    "connect:reconnect": "node scripts/connect.ts reconnect"
   },
   "dependencies": {
     "hono": "^4.6.0"

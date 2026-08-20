@@ -63,7 +63,10 @@ export async function resolveTenant(
   }
 
   // Tenant -> account_id. Filtra por tenant_id no codigo (defesa em
-  // profundidade), mesmo a service role contornando a RLS.
+  // profundidade), mesmo a service role contornando a RLS. Ordena por
+  // created_at desc: se houver mais de uma conta ativa (nao deveria; o
+  // callback do Marco 4 desativa as demais), vence a mais recente de forma
+  // deterministica, nunca uma linha arbitraria.
   const accounts = await supabaseSelect<ConnectedAccountRow>(
     env,
     'connected_accounts',
@@ -72,6 +75,7 @@ export async function resolveTenant(
       provider: 'eq.linkedin',
       status: 'eq.active',
       select: 'unipile_account_id',
+      order: 'created_at.desc',
       limit: '1',
     },
   );

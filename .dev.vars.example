@@ -2,22 +2,23 @@
 # `.dev.vars` esta no .gitignore e NUNCA deve ser versionado.
 # Em producao, use `npx wrangler secret put <NOME>` (nao este arquivo).
 
-# Chave da NOSSA API para o Marco 1 (dev). O cliente a envia no header
-# X-API-KEY. Se ausente, o servidor usa uma chave de dev embutida. No Marco 2
-# isto vira hash em api_keys (Supabase) e esta var some.
-DEV_API_KEY="defina-uma-chave-de-dev"
-
 # Credenciais da conta-mestra Unipile (segredo, so no servidor)
 UNIPILE_DSN="apiXXX.unipile.com:XXXXX"
 UNIPILE_MASTER_TOKEN="cole-aqui-o-master-token"
 
-# account_id da conta de LinkedIn de teste, seedado para o Marco 1
-# (no Marco 2 isso passa a vir do Supabase, nao daqui)
-UNIPILE_ACCOUNT_ID="cole-aqui-o-account-id-da-conta-de-teste"
-
 # Supabase (service role fica so no servidor; nunca no cliente)
 SUPABASE_URL="https://xxxx.supabase.co"
 SUPABASE_SERVICE_ROLE_KEY="cole-aqui-a-service-role-key"
+
+# Auto-conexao (Marco 4): URL publica do Worker, usada pelos scripts
+# connect:link / connect:reconnect para montar o notify_url do callback.
+# Ex.: https://linkedapi-proxy.<subdominio>.workers.dev (ou o dominio custom).
+PUBLIC_BASE_URL="https://cole-aqui-a-url-publica-do-worker"
+
+# Opcional: para onde o cliente e redirecionado ao final do wizard de conexao.
+# Sem estes valores, o wizard mostra a tela de conclusao padrao.
+# CONNECT_SUCCESS_REDIRECT_URL=""
+# CONNECT_FAILURE_REDIRECT_URL=""
 
 # Rate limit via Upstash Redis (alternativa ao Cloudflare KV)
 # UPSTASH_REDIS_REST_URL=""
