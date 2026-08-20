@@ -20,6 +20,26 @@ PUBLIC_BASE_URL="https://cole-aqui-a-url-publica-do-worker"
 # CONNECT_SUCCESS_REDIRECT_URL=""
 # CONNECT_FAILURE_REDIRECT_URL=""
 
+# Fase 2 (opcionais; cada rota que depende de um deles falha fechado sem o valor)
+
+# Secrets dos hooks de evento (gere com 32 bytes hex e registre com
+# npm run webhook:register; suba tambem via wrangler secret put em producao):
+# ACCOUNT_STATUS_HOOK_SECRET=""
+# MESSAGE_HOOK_SECRET=""
+
+# Billing Asaas: chave da API (script billing:subscribe) e token que o Asaas
+# devolve no header asaas-access-token do webhook (configurar no painel deles).
+# ASAAS_API_KEY=""
+# ASAAS_HOOK_TOKEN=""
+# ASAAS_BASE_URL=""        # default https://api.asaas.com/v3 (sandbox: api-sandbox)
+# PLAN_PRICE_BRL="57"
+
+# API administrativa (/admin). Sem a chave, as rotas respondem 404.
+# ADMIN_API_KEY=""
+
+# Capacidade de seats do piso da conta-mestra (default 10).
+# SEAT_CAP="10"
+
 # Rate limit via Upstash Redis (alternativa ao Cloudflare KV)
 # UPSTASH_REDIS_REST_URL=""
 # UPSTASH_REDIS_REST_TOKEN=""

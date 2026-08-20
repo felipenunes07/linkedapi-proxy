@@ -1,6 +1,7 @@
 import type { Env, Tenant } from '../types';
-import { supabaseSelect } from './supabase';
+import { supabaseSelect, supabaseUpdate } from './supabase';
 import { hashApiKey } from './hash';
+import { DAILY_LIMITS } from './limits';
 
 // Re-exportado por compatibilidade: o hash agora vive em ./hash (compartilhado
 // com o script de emissao de chave). Quem ja importava hashApiKey daqui continua
@@ -25,6 +26,8 @@ interface ApiKeyRow {
 
 interface TenantRow {
   id: string;
+  daily_message_limit?: number | null;
+  daily_invitation_limit?: number | null;
 }
 
 interface ConnectedAccountRow {
@@ -51,14 +54,16 @@ export async function resolveTenant(
 
   // Tenant ativo? Uma chave valida de um tenant suspenso nao age. Suspender o
   // tenant (status != active) passa a ter efeito imediato, sem precisar mexer
-  // em cada connected_account.
+  // em cada connected_account. Aproveita a query para carregar os overrides de
+  // limite do plano (fase 2; NULL = default do plano basico).
   const tenants = await supabaseSelect<TenantRow>(env, 'tenants', {
     id: `eq.${tenantId}`,
     status: 'eq.active',
-    select: 'id',
+    select: 'id,daily_message_limit,daily_invitation_limit',
     limit: '1',
   });
-  if (!tenants[0]) {
+  const tenantRow = tenants[0];
+  if (!tenantRow) {
     return null;
   }
 
@@ -84,5 +89,29 @@ export async function resolveTenant(
     return null;
   }
 
-  return { tenantId, unipileAccountId };
+  return {
+    tenantId,
+    unipileAccountId,
+    limits: {
+      messages: tenantRow.daily_message_limit ?? DAILY_LIMITS.messages,
+      invitations: tenantRow.daily_invitation_limit ?? DAILY_LIMITS.invitations,
+    },
+    keyHash,
+  };
+}
+
+// Auditoria: registra o ultimo uso da chave. Best-effort de proposito (chamado
+// via fireAndForget no auth): falha aqui nunca pode afetar a request. Filtra
+// tambem por tenant_id (defesa em profundidade, mesmo key_hash sendo unique).
+export async function touchApiKey(
+  env: Env,
+  keyHash: string,
+  tenantId: string,
+): Promise<void> {
+  await supabaseUpdate(
+    env,
+    'api_keys',
+    { key_hash: `eq.${keyHash}`, tenant_id: `eq.${tenantId}` },
+    { last_used_at: new Date().toISOString() },
+  );
 }

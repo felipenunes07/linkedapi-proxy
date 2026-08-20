@@ -15,6 +15,23 @@ export interface Env {
   // wrangler.jsonc. Sem ele, as rotas de escrita respondem 500 (nao seguimos
   // sem protecao, regra inviolavel #4).
   RATE_LIMIT: KVNamespace;
+
+  // Fase 2 (opcionais; cada rota que depende de um deles FALHA FECHADO se o
+  // secret nao estiver configurado):
+  // Secret do hook de status de conta (registrado na origem via webhook:register).
+  ACCOUNT_STATUS_HOOK_SECRET?: string;
+  // Secret do hook de mensagem recebida (idem).
+  MESSAGE_HOOK_SECRET?: string;
+  // Token que o Asaas devolve no header asaas-access-token do webhook de cobranca.
+  ASAAS_HOOK_TOKEN?: string;
+  // Chave da API administrativa (operador). Sem ela, /admin nao existe (404).
+  ADMIN_API_KEY?: string;
+  // Capacidade de seats do piso da conta-mestra (default 10).
+  SEAT_CAP?: string;
+  // URL publica do Worker (para a reconexao automatizada montar o notify_url
+  // do link de reconexao; mesma variavel dos scripts). Sem ela, a automacao de
+  // link nao roda (so a notificacao de desconexao).
+  PUBLIC_BASE_URL?: string;
 }
 
 // Acoes de escrita sujeitas a rate limit. Sao as que restringem contas no
@@ -42,6 +59,12 @@ export interface Tenant {
   // account_id da conta-mestra Unipile vinculada a este tenant.
   // Resolvido SEMPRE no servidor, nunca vindo do request.
   unipileAccountId: string;
+  // Limites diarios efetivos (override por tenant, fase 2; default do plano
+  // basico quando NULL no banco). Resolvidos no servidor junto com o tenant.
+  limits: Record<RateLimitAction, number>;
+  // Hash da chave usada nesta request (para rotacao/last_used_at; o valor em
+  // claro nunca fica no contexto).
+  keyHash: string;
 }
 
 // Variaveis por-request do Hono (context.var).

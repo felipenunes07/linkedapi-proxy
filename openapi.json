@@ -19,7 +19,8 @@
   "tags": [
     { "name": "Mensagens", "description": "Enviar mensagens em conversas existentes." },
     { "name": "Convites", "description": "Enviar convites de conexao." },
-    { "name": "Conversas", "description": "Listar suas conversas." }
+    { "name": "Conversas", "description": "Listar suas conversas." },
+    { "name": "Conta", "description": "Gerencie sua chave e seu webhook de eventos." }
   ],
   "paths": {
     "/v1/messages": {
@@ -113,7 +114,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Lista de conversas.",
+            "description": "Lista de conversas (ver ChatListEnvelope).",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/ChatListEnvelope" },
@@ -138,6 +139,108 @@
           },
           "401": { "$ref": "#/components/responses/Unauthorized" },
           "502": { "$ref": "#/components/responses/UpstreamError" }
+        }
+      }
+    },
+    "/v1/keys/rotate": {
+      "post": {
+        "tags": ["Conta"],
+        "summary": "Trocar sua chave",
+        "description": "Gera uma chave nova e revoga a chave usada nesta chamada. O valor novo aparece UMA unica vez, na resposta: guarde-o imediatamente.",
+        "operationId": "rotateKey",
+        "responses": {
+          "200": {
+            "description": "Chave trocada.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/KeyRotatedEnvelope" },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "api_key": "lk_live_...nova...",
+                    "note": "Guarde agora: este valor nao sera exibido de novo. A chave usada nesta chamada foi revogada."
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/v1/webhook": {
+      "put": {
+        "tags": ["Conta"],
+        "summary": "Configurar webhook de eventos",
+        "description": "Registra a URL https que recebera seus eventos (ex.: `message.received` quando alguem responde uma conversa; `account.disconnected` com um link de reconexao quando sua sessao cair). Cada entrega e um POST JSON `{type, data}` assinado: valide `X-Webhook-Signature` (sha256=HMAC-SHA256 do `\"{X-Webhook-Timestamp}.{corpo}\"` com o secret retornado aqui). O secret aparece UMA unica vez.",
+        "operationId": "configureWebhook",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["url"],
+                "additionalProperties": false,
+                "properties": {
+                  "url": {
+                    "type": "string",
+                    "description": "URL https que recebera os eventos."
+                  }
+                }
+              },
+              "example": { "url": "https://meuapp.com.br/webhooks/linkedapi" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Webhook configurado.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/WebhookConfiguredEnvelope" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      },
+      "get": {
+        "tags": ["Conta"],
+        "summary": "Ver configuracao do webhook",
+        "operationId": "getWebhook",
+        "responses": {
+          "200": {
+            "description": "Configuracao atual (o secret nunca e reexibido).",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/WebhookStatusEnvelope" },
+                "example": {
+                  "ok": true,
+                  "data": { "url": "https://meuapp.com.br/webhooks/linkedapi", "configured": true }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      },
+      "delete": {
+        "tags": ["Conta"],
+        "summary": "Remover webhook",
+        "operationId": "deleteWebhook",
+        "responses": {
+          "200": {
+            "description": "Webhook removido.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/WebhookStatusEnvelope" },
+                "example": { "ok": true, "data": { "configured": false } }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
         }
       }
     }
@@ -248,6 +351,58 @@
           "unread_count": { "type": ["integer", "null"], "description": "Mensagens nao lidas." },
           "archived": { "type": ["integer", "null"], "description": "1 se a conversa esta arquivada, 0 caso contrario." },
           "attendee_provider_id": { "type": ["string", "null"], "description": "Identificador do contato no LinkedIn." }
+        }
+      },
+      "KeyRotatedEnvelope": {
+        "type": "object",
+        "required": ["ok", "data"],
+        "properties": {
+          "ok": { "type": "boolean", "const": true },
+          "data": {
+            "type": "object",
+            "required": ["api_key"],
+            "properties": {
+              "api_key": {
+                "type": "string",
+                "description": "Sua chave nova (formato lk_live_...). Exibida somente aqui."
+              },
+              "note": { "type": "string" }
+            }
+          }
+        }
+      },
+      "WebhookConfiguredEnvelope": {
+        "type": "object",
+        "required": ["ok", "data"],
+        "properties": {
+          "ok": { "type": "boolean", "const": true },
+          "data": {
+            "type": "object",
+            "required": ["url", "secret"],
+            "properties": {
+              "url": { "type": "string" },
+              "secret": {
+                "type": "string",
+                "description": "Secret de assinatura (formato lk_whsec_...). Exibido somente aqui; valida o header X-Webhook-Signature de cada evento."
+              },
+              "note": { "type": "string" }
+            }
+          }
+        }
+      },
+      "WebhookStatusEnvelope": {
+        "type": "object",
+        "required": ["ok", "data"],
+        "properties": {
+          "ok": { "type": "boolean", "const": true },
+          "data": {
+            "type": "object",
+            "required": ["configured"],
+            "properties": {
+              "url": { "type": ["string", "null"] },
+              "configured": { "type": "boolean" }
+            }
+          }
         }
       },
       "ErrorEnvelope": {

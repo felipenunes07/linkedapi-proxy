@@ -9,18 +9,26 @@
 // Defensivo por construcao: a entrada e `unknown` (corpo upstream). Campo
 // ausente ou com tipo inesperado vira null/omitido, nunca um vazamento.
 
-function asRecord(value: unknown): Record<string, unknown> {
+// Exportados: os hooks de evento (fase 2) usam a mesma disciplina de whitelist
+// para projetar payloads externos antes de repassar ao cliente.
+export function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === 'object' && value !== null
     ? (value as Record<string, unknown>)
     : {};
 }
 
-function pickString(obj: Record<string, unknown>, key: string): string | null {
+export function pickString(
+  obj: Record<string, unknown>,
+  key: string,
+): string | null {
   const v = obj[key];
   return typeof v === 'string' ? v : null;
 }
 
-function pickNumber(obj: Record<string, unknown>, key: string): number | null {
+export function pickNumber(
+  obj: Record<string, unknown>,
+  key: string,
+): number | null {
   const v = obj[key];
   return typeof v === 'number' ? v : null;
 }

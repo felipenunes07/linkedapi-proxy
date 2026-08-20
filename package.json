@@ -19,7 +19,10 @@
     "tenant:list": "node scripts/tenants.ts list",
     "account:link": "node scripts/tenants.ts link-account",
     "prova:chave": "node scripts/prova.ts",
-    "deploy:setup": "node scripts/setup-deploy.ts"
+    "deploy:setup": "node scripts/setup-deploy.ts",
+    "billing:subscribe": "node scripts/billing.ts subscribe",
+    "billing:status": "node scripts/billing.ts status",
+    "webhook:register": "node scripts/webhooks.ts"
   },
   "dependencies": {
     "hono": "^4.6.0"

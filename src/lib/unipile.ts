@@ -4,7 +4,7 @@ import type { Env } from '../types';
 // Centraliza a base URL e a injecao do master token, para que NENHUMA rota fale
 // com a Unipile sem passar por aqui. Assim o segredo fica num lugar so.
 
-export function unipileFetch(
+export async function unipileFetch(
   env: Env,
   path: string,
   init: RequestInit = {},
@@ -17,7 +17,13 @@ export function unipileFetch(
   headers.set('X-API-KEY', env.UNIPILE_MASTER_TOKEN);
   headers.set('accept', 'application/json');
 
-  return fetch(url, { ...init, headers });
+  try {
+    return await fetch(url, { ...init, headers });
+  } catch {
+    // Erro do runtime carregaria a URL completa (com o DSN) na message, que
+    // acabaria no log do onError. Regra #2: DSN nunca em log.
+    throw new Error('upstream_unreachable');
+  }
 }
 
 // Enviar mensagem em chat existente.
@@ -61,6 +67,27 @@ export function sendInvitation(
     body.message = message;
   }
   return unipileFetch(env, '/users/invite', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+// Listar as contas conectadas na conta-mestra.
+//   GET /api/v1/accounts
+// Uso interno (API admin, fase 2): capacidade de seats e status das contas.
+export function listAccounts(env: Env): Promise<Response> {
+  return unipileFetch(env, '/accounts', { method: 'GET' });
+}
+
+// Criar link de hosted auth (usado pela reconexao automatizada, fase 2; o
+// caminho de operador continua em scripts/connect.ts). O corpo segue a doc de
+// hosted auth; nenhum campo vem de request de cliente.
+export function createHostedAuthLink(
+  env: Env,
+  body: Record<string, unknown>,
+): Promise<Response> {
+  return unipileFetch(env, '/hosted/accounts/link', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),

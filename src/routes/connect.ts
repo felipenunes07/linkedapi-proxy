@@ -3,6 +3,7 @@ import type { Env, Variables } from '../types';
 import { supabaseSelect, supabaseInsert, supabaseUpdate } from '../lib/supabase';
 import { hashApiKey } from '../lib/hash';
 import { getAccount } from '../lib/unipile';
+import { attemptKey, bumpAttempts } from '../lib/throttle';
 
 // Callback da auto-conexao (Marco 4, hosted auth).
 //
@@ -53,29 +54,16 @@ const STATUS_BY_PURPOSE: Record<string, string> = {
 };
 const KNOWN_STATUSES = new Set(Object.values(STATUS_BY_PURPOSE));
 
-// Tetos de tentativas (janela diaria UTC, contador em KV). O fluxo legitimo
-// gera 1-2 notifies por token; 5 e folga. Por IP e mais alto porque os egress
-// da Unipile podem concentrar varios notifies legitimos no mesmo IP.
+// Tetos de tentativas (janela diaria UTC, contador em KV compartilhado com os
+// demais hooks; ver src/lib/throttle.ts). O fluxo legitimo gera 1-2 notifies
+// por token; 5 e folga. Por IP e mais alto porque os egress da Unipile podem
+// concentrar varios notifies legitimos no mesmo IP.
 const MAX_ATTEMPTS_PER_TOKEN = 5;
 const MAX_ATTEMPTS_PER_IP = 100;
-const ATTEMPT_TTL_SECONDS = 2 * 24 * 60 * 60;
 
 // Token opaco tem tamanho conhecido (lk_conn_ + 64 hex). Cap folgado: nao
 // hashear payload arbitrariamente grande de uma rota publica.
 const MAX_NAME_LENGTH = 200;
-
-function attemptKey(scope: string, id: string): string {
-  const day = new Date().toISOString().slice(0, 10);
-  return `connect:${scope}:${id}:${day}`;
-}
-
-// Read-modify-write como o recordUsage do rate limit: overshoot leve sob
-// concorrencia e aceitavel, o teto e protecao de custo, nao contagem exata.
-async function bumpAttempts(kv: KVNamespace, key: string): Promise<number> {
-  const current = Number((await kv.get(key)) ?? '0') + 1;
-  await kv.put(key, String(current), { expirationTtl: ATTEMPT_TTL_SECONDS });
-  return current;
-}
 
 export const connectHooks = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -113,8 +101,8 @@ connectHooks.post('/', async (c) => {
   // 1. Throttle por IP e por token, ANTES de banco/Unipile.
   const ip = c.req.header('CF-Connecting-IP') ?? 'unknown';
   const tokenHash = await hashApiKey(name);
-  const ipAttempts = await bumpAttempts(kv, attemptKey('ip', ip));
-  const tokenAttempts = await bumpAttempts(kv, attemptKey('token', tokenHash));
+  const ipAttempts = await bumpAttempts(kv, attemptKey('connect-ip', ip));
+  const tokenAttempts = await bumpAttempts(kv, attemptKey('connect-token', tokenHash));
   if (ipAttempts > MAX_ATTEMPTS_PER_IP || tokenAttempts > MAX_ATTEMPTS_PER_TOKEN) {
     return c.json({ error: 'rate_limited' }, 429);
   }

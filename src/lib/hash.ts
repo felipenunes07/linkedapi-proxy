@@ -17,3 +17,11 @@ export async function hashApiKey(apiKey: string): Promise<string> {
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('');
 }
+
+// Comparacao de segredos sem vazar timing: compara os HASHES, nunca as strings
+// cruas (=== em string curto-circuita e vaza tamanho/prefixo). Usada pelos
+// hooks de evento (header de secret compartilhado) e pela API admin.
+export async function secretsEqual(a: string, b: string): Promise<boolean> {
+  const [ha, hb] = await Promise.all([hashApiKey(a), hashApiKey(b)]);
+  return ha === hb;
+}

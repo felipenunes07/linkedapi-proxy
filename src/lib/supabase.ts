@@ -63,6 +63,29 @@ export async function supabaseInsert<T>(
   return (await res.json()) as T[];
 }
 
+// RPC (funcao Postgres via PostgREST). Usada para operacoes que precisam ser
+// atomicas no banco (ex.: increment_usage). Mesma disciplina de segredo/erro.
+export async function supabaseRpc(
+  env: Env,
+  fn: string,
+  args: Record<string, unknown>,
+): Promise<void> {
+  const res = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/${fn}`, {
+    method: 'POST',
+    headers: {
+      apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+      authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      'content-type': 'application/json',
+      accept: 'application/json',
+    },
+    body: JSON.stringify(args),
+  });
+
+  if (!res.ok) {
+    throw new Error(`supabase_rpc_failed:${res.status}`);
+  }
+}
+
 // UPDATE (PATCH) tipado, com filtros PostgREST. Retorna as linhas alteradas.
 export async function supabaseUpdate<T>(
   env: Env,

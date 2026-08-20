@@ -1,7 +1,7 @@
--- bootstrap.sql: as migrations 0001..0003 concatenadas para colar UMA vez no
+-- bootstrap.sql: as migrations 0001..0007 concatenadas para colar UMA vez no
 -- SQL Editor de um projeto Supabase novo/restaurado. Fonte da verdade sao os
--- arquivos em supabase/migrations/; se eles mudarem, regenere este arquivo:
---   cat supabase/migrations/*.sql > supabase/bootstrap.sql (mais este cabecalho)
+-- arquivos em supabase/migrations/; se eles mudarem, regenere este arquivo
+-- (concatene as migrations na ordem, com este cabecalho).
 
 -- Migration 0001. Modelo de dados minimo da V1 para provar isolamento
 -- multi-tenant (PRD secao 8). Aplicada no Marco 2 no projeto Supabase
@@ -140,3 +140,105 @@ create index if not exists connect_tokens_tenant_idx on connect_tokens(tenant_id
 -- So a service role (Worker e scripts) toca nesta tabela.
 alter table connect_tokens enable row level security;
 revoke all on connect_tokens from anon, authenticated;
+
+-- Migration 0004. Planos e limites por tenant (fase 2).
+--
+-- Ate aqui os limites diarios eram constantes globais no Worker (80/30). Para
+-- vender tiers diferentes sem mudar codigo, o tenant ganha overrides opcionais:
+-- NULL = usa o default do plano basico (constantes do Worker). O rate limiter
+-- le esses valores na resolucao do tenant.
+--
+-- Os tetos dos CHECKs sao os limites SEGUROS do provedor (Unipile Provider
+-- Limits: mensagens ~100/dia, convites 80-100/dia): a regra inviolavel #4 pede
+-- limites conservadores por design. Valor acima disso exige nova migration,
+-- de proposito.
+
+alter table tenants add column if not exists plan text not null default 'basic';
+alter table tenants add column if not exists daily_message_limit integer;
+alter table tenants add column if not exists daily_invitation_limit integer;
+
+do $$ begin
+  alter table tenants
+    add constraint tenants_daily_message_limit_check
+    check (daily_message_limit is null or daily_message_limit between 1 and 150);
+exception when duplicate_object then null;
+end $$;
+
+do $$ begin
+  alter table tenants
+    add constraint tenants_daily_invitation_limit_check
+    check (daily_invitation_limit is null or daily_invitation_limit between 1 and 100);
+exception when duplicate_object then null;
+end $$;
+
+-- Migration 0005. Uso persistente (fase 2).
+--
+-- O contador KV do rate limit expira em 2 dias: serve para proteger, nao para
+-- faturar nem auditar. Esta tabela guarda o historico diario por tenant/acao.
+-- A escrita e best-effort no Worker (waitUntil, nunca bloqueia a resposta) via
+-- RPC atomica increment_usage. api_keys ganha last_used_at para auditoria.
+
+create table if not exists usage_daily (
+  tenant_id  uuid not null references tenants(id) on delete cascade,
+  action     text not null check (action in ('messages', 'invitations')),
+  day        date not null,
+  count      integer not null default 0,
+  primary key (tenant_id, action, day)
+);
+
+alter table usage_daily enable row level security;
+revoke all on usage_daily from anon, authenticated;
+
+-- Incremento atomico (upsert). SECURITY DEFINER + revoke: so a service role
+-- (que tem grants proprios) executa.
+create or replace function increment_usage(
+  p_tenant_id uuid,
+  p_action text,
+  p_day date
+) returns void
+language sql
+security definer
+set search_path = public
+as $$
+  insert into usage_daily (tenant_id, action, day, count)
+  values (p_tenant_id, p_action, p_day, 1)
+  on conflict (tenant_id, action, day)
+  do update set count = usage_daily.count + 1;
+$$;
+
+revoke execute on function increment_usage(uuid, text, date)
+  from public, anon, authenticated;
+
+alter table api_keys add column if not exists last_used_at timestamptz;
+
+-- Migration 0006. Webhook do cliente (fase 2).
+--
+-- O tenant pode registrar uma URL para receber eventos (ex.: mensagem
+-- recebida), assinados com HMAC-SHA256. O secret fica em claro nesta tabela
+-- (precisa ser recuperavel para assinar); a tabela e service-role-only como as
+-- demais, e o secret e gerado por nos com 256 bits (nunca escolhido pelo
+-- cliente). URL obrigatoriamente https (validado no Worker).
+
+alter table tenants add column if not exists webhook_url text;
+alter table tenants add column if not exists webhook_secret text;
+
+-- Migration 0007. Billing via Asaas (fase 2).
+--
+-- Assinatura Pix mensal por tenant. Regra do PRD: inadimplencia PAUSA o
+-- account_id (connected_accounts.status = 'paused'), nunca deleta; pagamento
+-- confirmado despausa. O Worker so processa o webhook do Asaas; a criacao de
+-- cliente/assinatura e feita pelo operador via script (billing:subscribe).
+
+create table if not exists billing_subscriptions (
+  tenant_id              uuid primary key references tenants(id) on delete cascade,
+  asaas_customer_id      text not null,
+  asaas_subscription_id  text not null unique,
+  status                 text not null default 'pending'
+                         check (status in ('pending', 'active', 'overdue', 'canceled')),
+  updated_at             timestamptz not null default now(),
+  created_at             timestamptz not null default now()
+);
+
+alter table billing_subscriptions enable row level security;
+revoke all on billing_subscriptions from anon, authenticated;
+

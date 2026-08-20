@@ -1,5 +1,7 @@
-import type { MiddlewareHandler } from 'hono';
+import type { Context, MiddlewareHandler } from 'hono';
 import type { Env, Variables, RateLimitAction } from '../types';
+import { supabaseRpc } from '../lib/supabase';
+import { fireAndForget } from '../lib/async';
 
 // Rate limit por chave (tenant) por janela diaria. Protege as contas de LinkedIn
 // do excesso que as restringe, e a propria equipe testando. Obrigatorio ja na V1
@@ -13,13 +15,11 @@ import type { Env, Variables, RateLimitAction } from '../types';
 //
 // Numeros default e o porque estao em docs/decisoes.md (Marco 3).
 
-// Limite default por acao, por dia (UTC), por tenant. Conservador, partindo dos
-// recomendados pela Unipile (Provider Limits): convites 80-100/dia e ~200/semana,
-// mensagens ~100/dia. Ficamos abaixo de proposito para deixar margem.
-export const DAILY_LIMITS: Record<RateLimitAction, number> = {
-  messages: 80,
-  invitations: 30, // ~210/semana, respeita tambem o teto semanal (~200) de convites
-};
+// Limites default do plano basico vivem em src/lib/limits.ts (fase 2: o tenant
+// pode ter override no banco; o efetivo chega resolvido em tenant.limits).
+// Re-exportado daqui por compatibilidade com quem ja importava.
+import { DAILY_LIMITS } from '../lib/limits';
+export { DAILY_LIMITS };
 
 // TTL da chave do contador: 2 dias cobre a janela diaria com folga e deixa o KV
 // limpar sozinho. KV exige expirationTtl >= 60s.
@@ -60,8 +60,10 @@ export function rateLimit(
       return c.json({ error: 'rate_limit_unavailable' }, 500);
     }
 
+    // Limite efetivo do tenant (override do plano ou default), resolvido
+    // server-side junto com o tenant. Nunca vem do request.
     const tenant = c.get('tenant');
-    const limit = DAILY_LIMITS[action];
+    const limit = tenant.limits[action];
     const current = Number((await kv.get(counterKey(tenant.tenantId, action))) ?? '0');
     if (current >= limit) {
       const retryAfter = secondsUntilNextUtcMidnight(new Date());
@@ -90,4 +92,22 @@ export async function recordUsage(
   await kv.put(key, String(current + 1), {
     expirationTtl: COUNTER_TTL_SECONDS,
   });
+}
+
+// Uso persistente (fase 2): o contador KV expira em 2 dias; o historico para
+// faturamento/auditoria vai para usage_daily via RPC atomica. Best-effort
+// pos-resposta de proposito: telemetria nunca bloqueia nem derruba a request
+// (o KV acima continua sendo a fonte do rate limit).
+export function persistUsage(
+  c: Context<{ Bindings: Env; Variables: Variables }>,
+  tenantId: string,
+  action: RateLimitAction,
+): void {
+  fireAndForget(c, () =>
+    supabaseRpc(c.env, 'increment_usage', {
+      p_tenant_id: tenantId,
+      p_action: action,
+      p_day: new Date().toISOString().slice(0, 10),
+    }),
+  );
 }

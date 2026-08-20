@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { Env, Variables } from './types';
 import { authMiddleware } from './middleware/auth';
-import { rateLimit, recordUsage } from './middleware/rateLimit';
+import { rateLimit, recordUsage, persistUsage } from './middleware/rateLimit';
 import { sendMessage, sendInvitation, listChats } from './lib/unipile';
 import {
   sanitizeMessageSent,
@@ -11,6 +11,9 @@ import {
 import openapi from '../openapi.json';
 import { docsHtml } from './lib/docs';
 import { connectHooks } from './routes/connect';
+import { eventHooks } from './routes/eventHooks';
+import { selfservice } from './routes/selfservice';
+import { admin } from './routes/admin';
 
 // Data plane: o proxy. Pipeline por request:
 //   autenticar chave -> resolver tenant + account_id (server-side)
@@ -42,6 +45,13 @@ app.get('/docs', (c) => c.html(docsHtml));
 // vem do connect_token de uso unico + verificacao upstream (ver routes/connect).
 // Nao entra no openapi.json: e infra, nao superficie do cliente.
 app.route('/hooks/connect', connectHooks);
+
+// Hooks de evento (fase 2): status de conta, mensagem recebida e cobranca.
+// Publicos, mas atras de secret compartilhado (fail-closed; ver routes/eventHooks).
+app.route('/hooks', eventHooks);
+
+// API administrativa (operador). Sem ADMIN_API_KEY configurada, responde 404.
+app.route('/admin', admin);
 
 // Rotas protegidas da V1 (implementar por marco).
 const v1 = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -83,6 +93,7 @@ v1.post('/messages', async (c) => {
 
   // Escrita aceita: conta a cota so agora (nao penaliza 400/502).
   await recordUsage(c.env.RATE_LIMIT, tenant.tenantId, 'messages');
+  persistUsage(c, tenant.tenantId, 'messages');
 
   // Whitelist: so os campos da nossa API. O corpo cru da Unipile carrega
   // account_id e metadados internos que nao saem daqui (white-label).
@@ -130,6 +141,7 @@ v1.post('/invitations', async (c) => {
 
   // Convite aceito: conta a cota so agora (nao penaliza 400/502).
   await recordUsage(c.env.RATE_LIMIT, tenant.tenantId, 'invitations');
+  persistUsage(c, tenant.tenantId, 'invitations');
 
   // Whitelist: so os campos da nossa API (white-label, mesma politica de /messages).
   const data: unknown = await res.json();
@@ -156,6 +168,10 @@ v1.get('/chats', async (c) => {
   const data: unknown = await res.json();
   return c.json({ ok: true, data: sanitizeChatList(data) });
 });
+
+// Self-service do tenant (fase 2): rotacao de chave e webhook. Dentro do /v1,
+// ou seja, atras do mesmo authMiddleware das demais rotas.
+v1.route('/', selfservice);
 
 app.route('/v1', v1);
 
