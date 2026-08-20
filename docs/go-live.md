@@ -7,7 +7,7 @@ Checklist em ordem. Tudo que era manual virou comando; os passos marcados com
 
 - [ ] [VOCE] Victor restaura o projeto Supabase (ou cria um novo, sa-east-1).
 - [ ] [VOCE] Colar [supabase/bootstrap.sql](../supabase/bootstrap.sql) no SQL
-      Editor do projeto e executar (e as migrations 0001-0003 em um arquivo so;
+      Editor do projeto e executar (e as migrations 0001-0007 em um arquivo so;
       idempotente, rodar de novo nao quebra).
 - [ ] Atualizar `SUPABASE_URL` e `SUPABASE_SERVICE_ROLE_KEY` no `.dev.vars`.
 - [ ] Criar o tenant de teste e vincular uma conta viva da conta-mestra:
@@ -72,7 +72,31 @@ npm run deploy:setup
 - [ ] Pessoa nao-dev recebe SO chave + link do `/docs` e envia mensagem e
       convite sozinha, sem nunca ver a palavra Unipile (promessa da V1).
 
-## F. Acabamento
+## F. Ativacao da fase 2 (depois do deploy)
+
+- [ ] Gerar os secrets novos e subir em `.dev.vars` E producao
+      (`npx wrangler secret put <NOME>`): `ACCOUNT_STATUS_HOOK_SECRET`,
+      `MESSAGE_HOOK_SECRET`, `ASAAS_HOOK_TOKEN`, `ADMIN_API_KEY`; e no Worker
+      tambem `PUBLIC_BASE_URL` (para o link de reconexao automatico).
+- [ ] Registrar os webhooks da origem:
+
+```bash
+npm run webhook:register -- account-status
+```
+
+```bash
+npm run webhook:register -- messaging
+```
+
+- [ ] [VOCE] Conta Asaas: gerar `ASAAS_API_KEY` e configurar o webhook de
+      cobranca no painel apontando para `{PUBLIC_BASE_URL}/hooks/billing` com
+      o token `ASAAS_HOOK_TOKEN` no header `asaas-access-token` (validar no
+      sandbox primeiro: `ASAAS_BASE_URL=https://api-sandbox.asaas.com/v3`).
+- [ ] Primeira assinatura: `npm run billing:subscribe -- <tenant_id> "<nome>"
+      <cpf_cnpj> <email>`; comprovar pagar -> ativa e atrasar -> pausa.
+- [ ] Conferir a operacao: `curl -H "X-ADMIN-KEY: ..." <url>/admin/capacity`.
+
+## G. Acabamento
 
 - [ ] [VOCE] Registrar `linkedapi.com.br` e apontar o custom domain no
       Cloudflare (sem mudanca de codigo; atualizar o server do openapi.json).

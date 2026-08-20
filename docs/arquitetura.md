@@ -1,11 +1,14 @@
-# Arquitetura da V1
+# Arquitetura
 
-Resumo carregado sob demanda. A fonte completa e @PRD.md (secoes 5 e 6).
+Resumo carregado sob demanda. A fonte completa e @PRD.md (secoes 5 e 6);
+fase 2 detalhada em @specs/fase-2.md.
 
 ## Dois planos
 
-- **Control plane**: cadastro, emissao de chave, futuramente painel e billing.
-  Tolerante a latencia. Fora do coracao da V1.
+- **Control plane**: cadastro, emissao de chave, billing, admin. Tolerante a
+  latencia. Na pratica: scripts do operador (`scripts/`), rotas self-service
+  (`/v1/keys/rotate`, `/v1/webhook`), hooks de evento (`/hooks/*`) e a API
+  admin (`/admin/*`).
 - **Data plane**: o proxy que roteia a chamada do cliente para a Unipile em
   tempo real. Rapido e sempre no ar. E o coracao da V1.
 
@@ -26,19 +29,37 @@ Unipile (conta-mestra unica)
 LinkedIn (conta do cliente)   <- limites do LinkedIn aplicam aqui
 ```
 
-## Modelo de dados (V1)
+## Modelo de dados
 
-Tres tabelas, o minimo para provar isolamento:
+Migrations 0001-0007 (bootstrap unico em `supabase/bootstrap.sql`):
 
-- `tenants` (id, nome, criado_em, status)
-- `api_keys` (id, tenant_id, key_hash, status, criado_em) -> so o hash
-- `connected_accounts` (id, tenant_id, unipile_account_id, provider='linkedin',
-  status)
+- `tenants` (id, nome, status, plan, daily_message_limit?,
+  daily_invitation_limit?, webhook_url?, webhook_secret?)
+- `api_keys` (id, tenant_id, key_hash UNIQUE, status, last_used_at?) -> so o hash
+- `connected_accounts` (id, tenant_id, unipile_account_id UNIQUE, provider,
+  status active|paused|disconnected) -> uma conta nunca aponta para 2 tenants
+- `connect_tokens` (id, tenant_id, token_hash UNIQUE, purpose create|reconnect,
+  status pending|used, expires_at) -> auto-conexao (Marco 4), so hash
+- `usage_daily` (tenant_id, action, day, count; RPC atomica `increment_usage`)
+- `billing_subscriptions` (tenant_id, asaas_customer_id, asaas_subscription_id
+  UNIQUE, status pending|active|overdue|canceled)
 
-Isolamento por RLS: um tenant nunca le dado de outro. A resolucao de
-`account_id` parte sempre de: API key -> tenant -> connected_accounts.
+Todas com RLS ligada sem policy (deny total a anon/authenticated) + REVOKE ALL;
+o Worker usa service role e filtra tenant_id no codigo (defesa em profundidade).
+A resolucao de `account_id` parte sempre de: API key -> tenant ->
+connected_accounts (status active, mais recente).
 
-Rascunho do schema: `supabase/migrations/0001_init.sql` (revisar no Marco 2).
+## Rotas do Worker
+
+| Rota | Auth | O que faz |
+|---|---|---|
+| `GET /health`, `/openapi.json`, `/docs` | publica | saude + doc (Scalar pinado com SRI) |
+| `POST /v1/messages`, `/v1/invitations`, `GET /v1/chats` | X-API-KEY | o proxy (respostas sanitizadas por whitelist) |
+| `POST /v1/keys/rotate`, `PUT/GET/DELETE /v1/webhook` | X-API-KEY | self-service do tenant |
+| `POST /hooks/connect` | connect_token (uso unico) | callback da auto-conexao (Marco 4) |
+| `POST /hooks/account-status`, `/hooks/message-received` | secret em header (fail-closed) | eventos da origem -> status/webhook do tenant |
+| `POST /hooks/billing` | asaas-access-token (fail-closed) | pagamento -> pausa/despausa |
+| `GET /admin/tenants`, `/admin/usage`, `/admin/capacity` | X-ADMIN-KEY (404 sem chave) | operacao |
 
 ## Decisoes de stack (resumo)
 

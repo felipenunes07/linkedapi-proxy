@@ -99,10 +99,29 @@ motivo. Detalhe completo em @PRD.md secao 3 e 5.
 | M4.9 | `app.onError` responde `{error: internal_error}` 500 e loga so `name: message` | Throw nao tratado caia no default do Hono (texto fora do ErrorEnvelope, log do objeto cru). Mensagens internas sao codigos sem segredo. | Firme |
 | M4.10 | `PUBLIC_BASE_URL` exige `https://` no script | O notify carrega o token em claro no corpo; nunca por http. | Firme |
 
+## Fase 2 (billing, webhooks, planos, admin) - decisoes
+
+Spec completa em specs/fase-2.md.
+
+| # | Decisao | Porque | Status |
+|---|---|---|---|
+| F2.1 | Limites por tenant no banco (overrides NULLaveis, CHECK 1..1000), resolvidos junto com o tenant; defaults em src/lib/limits.ts | Vender tier vira UPDATE, sem deploy. O limite continua 100% server-side. | Firme |
+| F2.2 | Uso persistente em usage_daily via RPC atomica increment_usage + api_keys.last_used_at, SEMPRE best-effort pos-resposta (fireAndForget/waitUntil) | KV expira em 2 dias e nao fatura. Telemetria nunca atrasa nem derruba request; o rate limit continua no KV. | Firme |
+| F2.3 | Self-service atras do auth: POST /v1/keys/rotate (revoga SO a chave usada, cria antes de revogar) e PUT/GET/DELETE /v1/webhook | Autonomia minima do cliente sem operador. Falha na criacao nunca deixa o tenant sem chave; GET nunca reexibe secret. | Firme |
+| F2.4 | Webhook do cliente assinado com HMAC-SHA256 estilo timestamp.corpo (X-Webhook-Signature/Timestamp/Event), 3 tentativas em waitUntil | Cliente valida origem e rejeita replay. Fila duravel (Queues) fica para depois (pendencias). | Firme |
+| F2.5 | EXCECAO consciente a regra "so hash": tenants.webhook_secret fica recuperavel | Precisa assinar cada evento. Mitigacao: gerado por nos (256 bits), nunca escolhido pelo cliente, tabela service-role-only, reexibido nunca. | Firme (unico segredo recuperavel do banco) |
+| F2.6 | Hooks de evento publicos com secret compartilhado em header, comparado por hash (secretsEqual) e FAIL-CLOSED (sem secret no env = 500) | Mesma postura da regra #4: rota que escreve nao opera sem protecao. Comparacao timing-safe. | Firme |
+| F2.7 | /hooks/account-status: sessao caida -> disconnected + evento account.disconnected com link de reconexao AUTO-GERADO (mesmo desenho do Marco 4, 24h); volta -> active; paused INTOCAVEL por status de sessao; updates filtram o status atual | Reconexao era o maior centro de custo de suporte previsto no PRD. Pausa e decisao de billing, nao de sessao. Filtro de status = idempotencia sob retry do webhook. | Firme |
+| F2.8 | /hooks/message-received: tenant resolvido pela conta NO BANCO, payload projetado por whitelist antes de repassar | Nunca confiar em payload para decidir tenant; account_id e campos internos da origem nao chegam ao cliente (white-label tambem nos eventos). | Firme |
+| F2.9 | Billing Asaas: assinatura Pix mensal criada por script do operador; o Worker so processa o webhook. PAYMENT_OVERDUE pausa as contas ativas do tenant; CONFIRMED/RECEIVED despausa | Regra do PRD: pausar, nunca deletar. Credencial do Asaas nao vive no Worker. Assinatura resolvida por billing_subscriptions, nunca pelo payload. | Firme |
+| F2.10 | API admin read-only atras de X-ADMIN-KEY (hash-compare); sem ADMIN_API_KEY as rotas respondem 404 | Operacao precisa de visao (tenants, uso, capacidade de seats) sem UI ainda. Superficie desligada nem aparece. | Firme |
+| F2.11 | Capacidade de seats: /admin/capacity cruza contas ativas no banco com a lista da conta-mestra e o teto SEAT_CAP (default 10); origem fora do ar = `master_unavailable: true` e `seats_available: null`, nunca zero fingido | O fracionamento do piso de ~10 contas E a economia do negocio; agora tem medidor, e o medidor nao mente. | Firme |
+| F2.12 | Endurecimento pos-review da fase 2: (a) hooks de evento com throttle KV fail-closed (por IP e por conta/assinatura, lib compartilhada com /hooks/connect); (b) derrubada de conta confirma o status na origem antes (payload OK na origem = ignora); (c) falha na geracao do link de reconexao NUNCA engole a notificacao de queda; (d) TTL do link automatico igual ao do operador (2h); (e) URL de webhook do cliente validada (so https:443, sem credencial, sem IP literal/localhost/.internal) e entrega com redirect:manual + timeout 5s (anti-SSRF); (f) CHECK dos overrides de limite no teto SEGURO do provedor (150 msgs, 100 convites); (g) touch de last_used_at deduplicado por KV (1/h) e filtrado por tenant; (h) unipileFetch nunca deixa o DSN vazar em erro de runtime (upstream_unreachable); (i) Cache-Control no-store nas respostas que carregam segredo; (j) tenant suspenso/conta pausada nao recebem eventos | Achados I1-I5 e M1/M2/M3/M5/M7/M8 do security-reviewer. Nenhum era bloqueante; todos corrigidos antes do PR. | Firme |
+
 ## Em aberto (ver PRD secao 12)
 - Registrar o dominio da API (`linkedapi.com.br`); nome LinkedAPI ja em uso nos docs.
 - ~~Valores default do rate limiter~~ RESOLVIDO no Marco 3 (M3.5: 80 msgs/dia, 30 convites/dia).
 - ~~Provedor de rate limit: KV vs Upstash~~ RESOLVIDO no Marco 3 (M3.4: Cloudflare KV).
 - Infra do banco: o projeto Supabase `voojvcdihyymewrhrlti` (M2.1) nao resolve mais no DNS
   (pausado/deletado). Escolher/criar projeto novo e reapontar `SUPABASE_URL` +
-  aplicar migrations 0001-0003 antes da prova real dos Marcos 4 e 5.
+  aplicar migrations 0001-0007 (bootstrap.sql) antes das provas reais.

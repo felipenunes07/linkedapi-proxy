@@ -1,9 +1,12 @@
-# LinkedAPI (codinome a definir)
+# LinkedAPI
 
 Camada proxy sobre a Unipile para automacao de LinkedIn. O cliente usa "a nossa
 API" em BRL; por baixo roteamos para a Unipile sob uma unica conta-mestra.
 
 Documento-mae: [PRD.md](PRD.md). Contexto para IA: [CLAUDE.md](CLAUDE.md).
+Onde estamos e o que falta: [HANDOFF.md](HANDOFF.md) e
+[docs/pendencias.md](docs/pendencias.md). Roteiro de ativacao:
+[docs/go-live.md](docs/go-live.md).
 
 ## Setup rapido
 
@@ -11,6 +14,7 @@ Documento-mae: [PRD.md](PRD.md). Contexto para IA: [CLAUDE.md](CLAUDE.md).
 npm install
 cp .dev.vars.example .dev.vars   # preencha com credenciais reais (nao versionar)
 npm run dev                      # Worker local em http://localhost:8787
+npm run typecheck && npm test    # 100 testes
 ```
 
 ## Estrutura
@@ -19,11 +23,13 @@ npm run dev                      # Worker local em http://localhost:8787
 |---|---|
 | `PRD.md` | Documento-mae: porque, o que e decisoes tecnicas |
 | `CLAUDE.md` | Contexto sempre-carregado para o Claude Code |
-| `docs/` | Arquitetura, decisoes e notas da Unipile (contexto sob demanda) |
-| `specs/` | Uma spec auto-contida por marco da V1 |
-| `src/` | Codigo do Worker (Hono): pipeline do proxy |
-| `supabase/migrations/` | Schema + RLS (rascunho, revisar no Marco 2) |
-| `test/` | Testes (destaque: isolamento multi-tenant) |
+| `HANDOFF.md` | Onde estamos e o que falta (snapshot) |
+| `docs/` | Arquitetura, decisoes, pendencias, go-live, notas da Unipile |
+| `specs/` | Uma spec por marco da V1 + fase 2 |
+| `src/` | Worker (Hono): proxy, auto-conexao, hooks de evento, self-service, admin |
+| `scripts/` | Operador: chaves, tenants, conexao, billing, webhooks, deploy, prova |
+| `supabase/migrations/` | Schema + RLS (0001-0007; `bootstrap.sql` = tudo em um) |
+| `test/` | 100 testes (destaque: isolamento multi-tenant) |
 | `.claude/` | Agents, skills e hooks do projeto |
 
 ## As tres regras que nao se reabrem

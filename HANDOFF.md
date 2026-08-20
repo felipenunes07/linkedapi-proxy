@@ -18,21 +18,25 @@ limit em Cloudflare KV, docs via Scalar a partir de OpenAPI.
 
 ## Status geral
 
-Todo o código da V1 (incluindo o Marco 4) está **pronto e verde**: typecheck +
-**62 testes**, com o diff inteiro revisado pelo subagent `security-reviewer`
-(achados corrigidos, ver decisões M4.2-M4.10). O que falta é infraestrutura e
-prova real: o projeto Supabase antigo sumiu do DNS, o Worker nunca foi
-deployado, e as provas ponta a ponta dos Marcos 4 e 5 dependem disso.
+Todo o código da V1 **e da fase 2** está **pronto e verde**: typecheck +
+**100 testes** (14 arquivos), com os diffs revisados pelo subagent
+`security-reviewer`. O que falta é infraestrutura, contas externas e prova
+real: o projeto Supabase antigo sumiu do DNS, o Worker nunca foi deployado, e
+as provas ponta a ponta dependem disso. Lista viva do que está pendente:
+[docs/pendencias.md](docs/pendencias.md).
 
-| Marco | Escopo | Status |
+| Fase | Escopo | Status |
 |---|---|---|
-| 1 | Proxy esqueleto: enviar mensagem | ✅ código + verificado no real |
-| 2 | Supabase + isolamento multi-tenant | ✅ código + verificado no real |
-| 3 | 3 endpoints da V1 + rate limit | ✅ código + verificado no real |
-| 5 | Docs (Scalar) + emissão/revogação de chave | ✅ código; **falta prova real** |
-| 4 | Auto-conexão (hosted auth Unipile) | ✅ código + 22 testes; **falta prova real** |
+| Marco 1 | Proxy esqueleto: enviar mensagem | ✅ código + verificado no real |
+| Marco 2 | Supabase + isolamento multi-tenant | ✅ código + verificado no real |
+| Marco 3 | 3 endpoints da V1 + rate limit | ✅ código + verificado no real |
+| Marco 5 | Docs (Scalar) + emissão/revogação de chave | ✅ código; **falta prova real** |
+| Marco 4 | Auto-conexão (hosted auth) | ✅ código + 22 testes; **falta prova real** |
+| Fase 2 | Billing, webhooks, planos, reconexão, admin | ✅ código + testes; **falta infra/contas** ([specs/fase-2.md](specs/fase-2.md)) |
 
-Os 3 endpoints da V1: `POST /v1/messages`, `POST /v1/invitations`, `GET /v1/chats`.
+Os 3 endpoints do proxy: `POST /v1/messages`, `POST /v1/invitations`,
+`GET /v1/chats`; self-service: `POST /v1/keys/rotate` e `PUT/GET/DELETE
+/v1/webhook` (tudo no [openapi.json](openapi.json)).
 
 ## Estado da infraestrutura (verificado em 2026-08-20)
 
@@ -42,8 +46,9 @@ Os 3 endpoints da V1: `POST /v1/messages`, `POST /v1/invitations`, `GET /v1/chat
 - **Supabase: SUMIU.** `voojvcdihyymewrhrlti.supabase.co` não resolve no DNS
   (projeto pausado por inatividade ou deletado). Restaurar pelo dashboard do
   Victor, ou criar projeto novo (sa-east-1), reapontar `SUPABASE_URL` +
-  `SUPABASE_SERVICE_ROLE_KEY` e aplicar as migrations 0001, 0002 e 0003 na
-  ordem. Sem banco não há prova real de chave nem de auto-conexão.
+  `SUPABASE_SERVICE_ROLE_KEY` e aplicar as migrations 0001-0007 (um comando:
+  colar `supabase/bootstrap.sql` no SQL Editor). Sem banco não há prova real
+  de chave nem de auto-conexão.
 - **Cloudflare: sem login.** `wrangler whoami` não autenticado nesta máquina;
   o deploy precisa da conta do Victor (`npx wrangler login`).
 
@@ -78,6 +83,23 @@ Os 3 endpoints da V1: `POST /v1/messages`, `POST /v1/invitations`, `GET /v1/chat
   importantes (consumo não atômico, rota pública sem throttle, contas ativas
   múltiplas por tenant, oráculo no 409) foram corrigidos. Registro em
   [docs/decisoes.md](docs/decisoes.md) (M4.2-M4.10).
+- **Fase 2 completa em código** (decisões F2.1-F2.12, incluindo o
+  endurecimento pós-review; spec em [specs/fase-2.md](specs/fase-2.md)):
+  - Migrations 0004-0007: planos/limites por tenant, uso persistente
+    (`usage_daily` + RPC atômica) e `last_used_at`, webhook do cliente,
+    `billing_subscriptions`.
+  - Self-service atrás do auth: rotação de chave e configuração de webhook
+    (documentados no openapi.json, aba "Conta").
+  - Webhooks assinados (HMAC timestamp.corpo) com retry, entregues via
+    `waitUntil`.
+  - Hooks de evento com secret fail-closed: `/hooks/account-status` (sessão
+    caiu → disconnected + evento com **link de reconexão auto-gerado**),
+    `/hooks/message-received` (repasse sanitizado) e `/hooks/billing`
+    (inadimplência pausa, pagamento despausa; nunca deleta).
+  - API admin read-only (`/admin/tenants|usage|capacity`, 404 sem
+    `ADMIN_API_KEY`), incluindo o medidor de seats da conta-mestra.
+  - Scripts: `billing:subscribe`/`billing:status` (Asaas) e
+    `webhook:register` (registra os hooks na origem).
 
 ## O que falta (nada é código; tudo é infra + prova real)
 
@@ -85,7 +107,7 @@ Os 3 endpoints da V1: `POST /v1/messages`, `POST /v1/invitations`, `GET /v1/chat
 > [docs/go-live.md](docs/go-live.md). Os itens abaixo são o resumo.
 
 1. **Banco novo (bloqueia tudo).** Restaurar ou criar projeto Supabase,
-   aplicar migrations 0001-0003, seedar 1 tenant e vincular uma conta real
+   aplicar migrations 0001-0007 (bootstrap.sql), seedar 1 tenant e vincular uma conta real
    (`connected_accounts` com um dos account_ids vivos da conta-mestra).
 2. **Deploy no workers.dev.** Roteiro abaixo. Preencher `PUBLIC_BASE_URL` no
    `.dev.vars` com a URL resultante (o notify da auto-conexão precisa dela).
@@ -106,7 +128,7 @@ npm install
 cp .dev.vars.example .dev.vars   # preencha com credenciais reais (pedir ao Victor)
 npm run dev                      # Worker local em http://localhost:8787
 npm run typecheck                # tsc do Worker + dos scripts
-npm test                         # vitest (62 testes)
+npm test                         # vitest (100 testes)
 ```
 
 **Segredos NÃO estão no repositório** (regra inviolável #2). O `.dev.vars` é
@@ -174,12 +196,12 @@ Precisa do deploy (o notify da Unipile tem que alcançar o Worker público).
 |---|---|
 | `PRD.md` | Documento-mãe |
 | `CLAUDE.md` | Contexto sempre-carregado + regras invioláveis |
-| `specs/` | Uma spec por marco (todas detalhadas) |
-| `src/` | Worker (Hono): pipeline do proxy + callback de auto-conexão |
-| `scripts/keys.ts` | Emissão/revogação de chave (standalone Node) |
-| `scripts/connect.ts` | Links de auto-conexão/reconexão (standalone Node) |
-| `openapi.json` | Spec pública dos 3 endpoints |
-| `supabase/migrations/` | Schema + RLS + constraints + connect_tokens |
-| `test/` | Testes (destaques: `isolation.test.ts`, `connect.test.ts`) |
-| `docs/` | Arquitetura, decisões, notas da Unipile |
+| `specs/` | Uma spec por marco + `fase-2.md` |
+| `src/routes/` | Auto-conexão, hooks de evento, self-service, admin |
+| `src/lib/`, `src/middleware/` | Pipeline do proxy, sanitização, HMAC, limites |
+| `scripts/` | Operador: chaves, tenants, conexão, billing, webhooks, deploy, prova |
+| `openapi.json` | Spec pública (proxy + self-service) |
+| `supabase/migrations/` | Schema 0001-0007 (`bootstrap.sql` = tudo em um) |
+| `test/` | 100 testes (destaques: `isolation`, `connect`, `eventHooks`) |
+| `docs/` | Arquitetura, decisões, **pendências**, go-live, notas da Unipile |
 | `.claude/` | Agents, skills e hooks do projeto |

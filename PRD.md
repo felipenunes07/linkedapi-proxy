@@ -143,12 +143,13 @@ Constrói a hosted auth da Unipile: backend gera link white-label, redireciona o
 OpenAPI spec dos 3 endpoints, renderizado com Scalar. Forma simples de emitir/revogar chave (pode ser script no início).
 **Feito quando:** dá para entregar a uma pessoa de teste uma chave + link de doc, e ela usa sem explicação verbal.
 ---
-## 10. Fora de escopo / Fase 2+
-- **Billing (Asaas):** assinatura recorrente em BRL, Pix/boleto, controle de inadimplência (pausar `account_id`, nunca deletar). Definir taxa por transação do Asaas no cálculo de margem.
-- **Webhooks para o cliente:** ingestão de eventos da Unipile (nova mensagem, status de conta) + fan-out assinado (HMAC) para a URL do cliente, com fila e retry. Padrão: ingestão desacoplada do processamento.
-- **Reconexão automatizada:** capturar webhook de status de conta da Unipile e notificar o cliente quando o LinkedIn cair/pedir re-login. É o principal centro de custo de suporte previsto.
-- **Painel admin (operador):** visão de todos os tenants, saúde das contas, uso, e monitoramento de abuso (detectar quem manda volume demais antes de o LinkedIn restringir).
-- **Painel/inbox do cliente**, expansão de endpoints, e comercialização (aquisição dos primeiros clientes).
+## 10. Fase 2 (status em 2026-08-20: núcleo EM CÓDIGO; spec em specs/fase-2.md, pendências em docs/pendencias.md)
+- **Billing (Asaas):** ✅ em código. Assinatura Pix mensal por script (`billing:subscribe`), webhook `/hooks/billing`: inadimplência pausa o `account_id` (nunca deleta), pagamento despausa. Pendente: conta Asaas real + taxa por transação no cálculo de margem.
+- **Webhooks para o cliente:** ✅ em código. Ingestão de eventos da origem (`/hooks/message-received`, `/hooks/account-status`) + fan-out assinado (HMAC timestamp.corpo) para a URL registrada pelo tenant (`PUT /v1/webhook`), com 3 tentativas. Fila durável com retry longo fica para depois.
+- **Reconexão automatizada:** ✅ em código. Webhook de status de conta detecta a queda, marca a conta como desconectada e envia ao cliente o evento `account.disconnected` já com um link de reconexão auto-gerado (uso único, 24h).
+- **Painel admin (operador):** parcialmente. API read-only `/admin/tenants|usage|capacity` (inclui medidor de seats da conta-mestra e uso persistente por dia). UI e alertas de abuso: pendente.
+- **Planos/limites por tenant e self-service mínimo:** ✅ em código (overrides de limite no banco; rotação de chave e webhook pelo próprio cliente).
+- **Ainda fora:** painel/inbox do cliente com UI, onboarding self-service completo (cadastro → pagamento → conexão → primeira chave), expansão de endpoints e comercialização.
 ---
 ## 11. Riscos e mitigações
 | Risco | Mitigação |
@@ -162,7 +163,7 @@ OpenAPI spec dos 3 endpoints, renderizado com Scalar. Forma simples de emitir/re
 ---
 ## 12. Perguntas em aberto
 - Domínio da API: registrar `linkedapi.com.br` (o nome LinkedAPI já está em uso nos docs e na spec).
-- Infra do banco: o projeto Supabase do Marco 2 saiu do ar (ver docs/decisoes.md, "Em aberto"); restaurar ou criar novo e aplicar as migrations 0001-0003.
+- Infra do banco: o projeto Supabase do Marco 2 saiu do ar (ver docs/decisoes.md, "Em aberto"); restaurar ou criar novo e aplicar as migrations 0001-0007 (supabase/bootstrap.sql).
 - Taxa efetiva do Asaas no ticket de R$57 (impacta margem; relevante só na fase 2).
 - Resolvidas: valores default do rate limiter (M3.5: 80 mensagens/dia, 30 convites/dia) e provedor do contador (M3.4: Cloudflare KV).
 ---
