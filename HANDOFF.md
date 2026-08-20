@@ -81,6 +81,9 @@ Os 3 endpoints da V1: `POST /v1/messages`, `POST /v1/invitations`, `GET /v1/chat
 
 ## O que falta (nada é código; tudo é infra + prova real)
 
+> Checklist executável, em ordem e com os comandos prontos:
+> [docs/go-live.md](docs/go-live.md). Os itens abaixo são o resumo.
+
 1. **Banco novo (bloqueia tudo).** Restaurar ou criar projeto Supabase,
    aplicar migrations 0001-0003, seedar 1 tenant e vincular uma conta real
    (`connected_accounts` com um dos account_ids vivos da conta-mestra).

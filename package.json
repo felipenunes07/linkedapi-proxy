@@ -14,7 +14,12 @@
     "key:issue": "node scripts/keys.ts issue",
     "key:revoke": "node scripts/keys.ts revoke",
     "connect:link": "node scripts/connect.ts link",
-    "connect:reconnect": "node scripts/connect.ts reconnect"
+    "connect:reconnect": "node scripts/connect.ts reconnect",
+    "tenant:create": "node scripts/tenants.ts create",
+    "tenant:list": "node scripts/tenants.ts list",
+    "account:link": "node scripts/tenants.ts link-account",
+    "prova:chave": "node scripts/prova.ts",
+    "deploy:setup": "node scripts/setup-deploy.ts"
   },
   "dependencies": {
     "hono": "^4.6.0"
