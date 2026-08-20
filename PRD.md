@@ -161,10 +161,10 @@ OpenAPI spec dos 3 endpoints, renderizado com Scalar. Forma simples de emitir/re
 | Dependência de fornecedor único (Unipile) | Aceito conscientemente na V1; monitorar mudanças de ToS/preço |
 ---
 ## 12. Perguntas em aberto
-- Nome/marca do produto e domínio da API.
-- Quem coda o Worker (define o formato de entrega dos próximos passos).
-- Valores default do rate limiter para convite e mensagem (partir dos recomendados pela Unipile).
-- Taxa efetiva do Asaas no ticket de R$57 (impacta margem — relevante só na fase 2).
+- Domínio da API: registrar `linkedapi.com.br` (o nome LinkedAPI já está em uso nos docs e na spec).
+- Infra do banco: o projeto Supabase do Marco 2 saiu do ar (ver docs/decisoes.md, "Em aberto"); restaurar ou criar novo e aplicar as migrations 0001-0003.
+- Taxa efetiva do Asaas no ticket de R$57 (impacta margem; relevante só na fase 2).
+- Resolvidas: valores default do rate limiter (M3.5: 80 mensagens/dia, 30 convites/dia) e provedor do contador (M3.4: Cloudflare KV).
 ---
 ## 13. Referências
 ### Documentação oficial da Unipile
