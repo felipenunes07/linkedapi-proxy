@@ -31,9 +31,18 @@ humana** (logins, contas, gente testando): [ACOES-HUMANAS.md](ACOES-HUMANAS.md).
 | Marco 1 | Proxy esqueleto: enviar mensagem | ✅ código + verificado no real |
 | Marco 2 | Supabase + isolamento multi-tenant | ✅ código + verificado no real |
 | Marco 3 | 3 endpoints da V1 + rate limit | ✅ código + verificado no real |
-| Marco 5 | Docs (Scalar) + emissão/revogação de chave | ✅ código; **falta prova real** |
-| Marco 4 | Auto-conexão (hosted auth) | ✅ código + 22 testes; **falta prova real** |
-| Fase 2 | Billing, webhooks, planos, reconexão, admin | ✅ código + testes; **falta infra/contas** ([specs/fase-2.md](specs/fase-2.md)) |
+| Marco 5 | Docs (Scalar) + emissão/revogação de chave | ✅ **PROVADO no real em 2026-09-01** (local E workers.dev: emite -> 200 -> revoga -> 401) |
+| Marco 4 | Auto-conexão (hosted auth) | ✅ código + 22 testes; **falta só a prova com pessoa externa** |
+| Fase 2 | Billing, webhooks, planos, reconexão, admin | ✅ código + secrets em produção + webhooks account-status e messaging registrados e com smoke OK; **falta Asaas** ([specs/fase-2.md](specs/fase-2.md)) |
+
+Provas reais executadas em 2026-09-01 (contra Supabase + Unipile + LinkedIn reais):
+- Marco 5 local e público: PASS (script `prova:chave`, tenant A / conta Márcio).
+- Chamada LinkedIn real: `GET /v1/chats` 200 nas duas provas.
+- **Isolamento cross-tenant real (E)**: chave A + `chat_id` real do tenant B ->
+  Unipile 403 -> proxy `502 upstream_error`, nada enviado. PASS.
+- Chave inválida e ausente -> 401 (`invalid_api_key` / `missing_api_key`).
+- Webhook `message-received` (produção): sem secret 401, payload vazio 400,
+  conta desconhecida `{ok, ignored}`. Fail-closed confirmado.
 
 Os 3 endpoints do proxy: `POST /v1/messages`, `POST /v1/invitations`,
 `GET /v1/chats`; self-service: `POST /v1/keys/rotate` e `PUT/GET/DELETE
@@ -44,12 +53,13 @@ Os 3 endpoints do proxy: `POST /v1/messages`, `POST /v1/invitations`,
 - **Unipile: OK.** O master token autentica; a conta-mestra tem 5 contas
   LinkedIn conectadas (4 com status OK, a do Victor com status `CREDENTIALS`,
   ou seja, sessão caída; usar `npm run connect:reconnect` quando houver deploy).
-- **Supabase: SUMIU.** `voojvcdihyymewrhrlti.supabase.co` não resolve no DNS
-  (projeto pausado por inatividade ou deletado). Restaurar pelo dashboard do
-  Victor, ou criar projeto novo (sa-east-1), reapontar `SUPABASE_URL` +
-  `SUPABASE_SERVICE_ROLE_KEY` e aplicar as migrations 0001-0007 (um comando:
-  colar `supabase/bootstrap.sql` no SQL Editor). Sem banco não há prova real
-  de chave nem de auto-conexão.
+- **Supabase: RESTAURADO (2026-09-01).** O Victor restaurou o projeto
+  `voojvcdihyymewrhrlti` (mesma URL, mesma service_role key; dados de julho
+  sobreviveram). O Felipe entrou na org do Victor (convite aceito). O
+  `bootstrap.sql` foi aplicado no SQL Editor: as 6 tabelas e colunas da fase 2
+  conferidas via REST. Tenant A -> conta do Márcio; Tenant B -> conta do
+  Dennis (as antigas, Victor CREDENTIALS e placeholder, foram para
+  `disconnected`).
 - **Cloudflare: DEPLOYADO (2026-09-01).** Worker publicado na conta do Victor:
   `https://linkedapi-proxy.victor-58a.workers.dev` (`/health` ok, `/docs` no ar,
   KV RATE_LIMIT criado, 4 secrets subidos, `PUBLIC_BASE_URL` preenchido no

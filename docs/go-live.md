@@ -3,14 +3,15 @@
 Checklist em ordem. Tudo que era manual virou comando; os passos marcados com
 [VOCE] sao os unicos que exigem acao humana fora do terminal.
 
-## A. Banco (pre-requisito de tudo)
+## A. Banco (pre-requisito de tudo) - FEITO 2026-09-01
 
-- [ ] [VOCE] Victor restaura o projeto Supabase (ou cria um novo, sa-east-1).
-- [ ] [VOCE] Colar [supabase/bootstrap.sql](../supabase/bootstrap.sql) no SQL
-      Editor do projeto e executar (e as migrations 0001-0007 em um arquivo so;
-      idempotente, rodar de novo nao quebra).
-- [ ] Atualizar `SUPABASE_URL` e `SUPABASE_SERVICE_ROLE_KEY` no `.dev.vars`.
-- [ ] Criar o tenant de teste e vincular uma conta viva da conta-mestra:
+- [x] [VOCE] Victor restaurou o projeto `voojvcdihyymewrhrlti` (mesma URL/key).
+- [x] [VOCE] `bootstrap.sql` executado no SQL Editor; 6 tabelas + colunas da
+      fase 2 conferidas via REST.
+- [x] `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY`: os valores antigos voltaram a
+      valer (mesmo projeto), nada a atualizar.
+- [x] Tenants de julho sobreviveram; Tenant A -> conta Márcio, Tenant B ->
+      conta Dennis (antigas viraram `disconnected`). Comandos de referencia:
 
 ```bash
 npm run tenant:create -- "Tenant de teste"
@@ -23,10 +24,11 @@ npm run account:link -- <tenant_id> <unipile_account_id>
       (o script confere na Unipile que a conta existe e e LinkedIn antes de
       gravar; `npm run tenant:list` mostra o estado)
 
-## B. Prova real do Marco 5 (local, sem deploy)
+## B. Prova real do Marco 5 (local, sem deploy) - PASS 2026-09-01
 
-- [ ] Terminal 1: `npm run dev`
-- [ ] Terminal 2:
+- [x] Terminal 1: `npm run dev` (atencao: usar `http://127.0.0.1:8787`; nesta
+      maquina outro processo escuta `localhost:8787` em IPv6)
+- [x] Terminal 2:
 
 ```bash
 npm run prova:chave -- <tenant_id>
@@ -34,21 +36,17 @@ npm run prova:chave -- <tenant_id>
 
       Emite chave -> espera 200 -> revoga -> espera 401. PASS = Marco 5 fechado.
 
-## C. Deploy no workers.dev
+## C. Deploy no workers.dev - FEITO 2026-09-01
 
-- [ ] [VOCE] `npx wrangler login` (conta Cloudflare do Victor).
-- [ ] Setup em um comando (cria KV, preenche wrangler.jsonc, sobe os 4 secrets):
-
-```bash
-npm run deploy:setup
-```
-
-- [ ] `npm run deploy` e anotar a URL.
-- [ ] Smoke: `curl https://<url>/health` da `{"ok":true}`; abrir `/docs`.
-- [ ] Preencher `PUBLIC_BASE_URL` no `.dev.vars` com a URL.
-- [ ] Trocar o primeiro `server` do `openapi.json` pela URL e redeployar.
-- [ ] Repetir a prova da chave contra a URL publica:
-      `npm run prova:chave -- <tenant_id> https://<url>`.
+- [x] `npx wrangler login` (OAuth do Felipe, que tem acesso a conta do Victor;
+      `account_id` fixado no wrangler.jsonc).
+- [x] KV RATE_LIMIT criado; 9 secrets subidos (4 base + 4 da fase 2 +
+      PUBLIC_BASE_URL).
+- [x] Deploy: `https://linkedapi-proxy.victor-58a.workers.dev`.
+- [x] Smoke: `/health` `{"ok":true}`; `/docs` 200.
+- [x] `PUBLIC_BASE_URL` preenchido no `.dev.vars`.
+- [x] `server` do `openapi.json` trocado e redeployado.
+- [x] Prova da chave contra a URL publica: PASS (2026-09-01).
 
 ## D. Prova real do Marco 4 (auto-conexao)
 
@@ -66,27 +64,22 @@ npm run deploy:setup
 
 ## E. Provas de isolamento e de produto
 
-- [ ] Cross-tenant real: com 2 tenants de contas reais, chave A + `chat_id`
-      real de B tem que falhar (e o follow-up de posse de chat_id do Marco 3;
-      se a Unipile nao recusar, validar posse no servidor antes do envio).
+- [x] Cross-tenant real - PASS 2026-09-01: chave A (Márcio) + `chat_id` real de
+      B (Dennis) em `POST /v1/messages` -> Unipile recusou com 403 -> proxy
+      devolveu `502 {error: upstream_error, upstream_status: 403}`, nada foi
+      enviado. A Unipile recusa; nao precisa validar posse no servidor.
 - [ ] Pessoa nao-dev recebe SO chave + link do `/docs` e envia mensagem e
       convite sozinha, sem nunca ver a palavra Unipile (promessa da V1).
 
 ## F. Ativacao da fase 2 (depois do deploy)
 
-- [ ] Gerar os secrets novos e subir em `.dev.vars` E producao
-      (`npx wrangler secret put <NOME>`): `ACCOUNT_STATUS_HOOK_SECRET`,
-      `MESSAGE_HOOK_SECRET`, `ASAAS_HOOK_TOKEN`, `ADMIN_API_KEY`; e no Worker
-      tambem `PUBLIC_BASE_URL` (para o link de reconexao automatico).
-- [ ] Registrar os webhooks da origem:
-
-```bash
-npm run webhook:register -- account-status
-```
-
-```bash
-npm run webhook:register -- messaging
-```
+- [x] Secrets gerados e em producao (2026-09-01): `ACCOUNT_STATUS_HOOK_SECRET`,
+      `MESSAGE_HOOK_SECRET`, `ASAAS_HOOK_TOKEN`, `ADMIN_API_KEY`,
+      `PUBLIC_BASE_URL`.
+- [x] Webhooks registrados na Unipile (2026-09-01): `account-status`
+      (id `0Az3LTd7R4ejVAX_7vE_4g`) e `messaging` (id `bcDRWBK2TCqqF9C8jWxZTg`).
+      Smoke do `/hooks/message-received` em producao: sem secret 401, payload
+      vazio 400, conta desconhecida `{ok, ignored}`.
 
 - [ ] [VOCE] Conta Asaas: gerar `ASAAS_API_KEY` e configurar o webhook de
       cobranca no painel apontando para `{PUBLIC_BASE_URL}/hooks/billing` com
