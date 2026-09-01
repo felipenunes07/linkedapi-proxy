@@ -4,6 +4,8 @@
   // Em dev: `.dev.vars`. Em producao: `npx wrangler secret put <NOME>`.
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "linkedapi-proxy",
+  // Conta do Victor (o token OAuth do Felipe acessa 2 contas; deploy vai nesta)
+  "account_id": "58af046efff1765ebba08637bebcb580",
   "main": "src/index.ts",
   "compatibility_date": "2026-07-01",
   "compatibility_flags": ["nodejs_compat"],
@@ -16,7 +18,7 @@
   // crie o namespace e troque o id:
   //   npx wrangler kv namespace create RATE_LIMIT
   "kv_namespaces": [
-    { "binding": "RATE_LIMIT", "id": "REPLACE_WITH_KV_NAMESPACE_ID" }
+    { "binding": "RATE_LIMIT", "id": "6418f47785a5457da8da180234fa5086" }
   ],
 
   // Variaveis NAO secretas podem ir em "vars". Segredos, nunca.

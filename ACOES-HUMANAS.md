@@ -26,21 +26,10 @@ inatividade ou deletado). Sem banco, nenhuma prova real roda.
 
 **Destrava:** prova real da chave (Marco 5), seeds de tenant, tudo do banco.
 
-### 1.2 Login na Cloudflare para o deploy
-O Worker nunca foi publicado; `wrangler` esta sem login nesta maquina.
-
-- Na maquina do projeto, rodar:
-
-```bash
-npx wrangler login
-```
-
-- (abre o navegador; logar com a conta Cloudflare do Victor e autorizar)
-- Depois disso o resto e comando pronto: `npm run deploy:setup` e
-  `npm run deploy`.
-
-**Destrava:** URL publica do Worker, e com ela a auto-conexao (Marco 4), os
-webhooks e a doc publica `/docs` no ar.
+### 1.2 Login na Cloudflare para o deploy - FEITO em 2026-09-01
+Felipe logou via OAuth (tem acesso a conta do Victor) e o Worker foi publicado:
+`https://linkedapi-proxy.victor-58a.workers.dev` (`/health` ok, `/docs` no ar,
+KV + secrets configurados). Nada mais a fazer aqui.
 
 ### 1.3 Registrar o dominio
 - Registrar `linkedapi.com.br` (registro.br) e apontar como custom domain do
@@ -67,18 +56,13 @@ O codigo de cobranca esta pronto; falta a conta.
 **Destrava:** cobrar de verdade: `npm run billing:subscribe` cria a assinatura
 Pix; atraso pausa o cliente sozinho, pagamento despausa.
 
-### 2.2 Gerar e subir os secrets da fase 2
-Sao 4 valores novos que alguem precisa gerar (32 bytes hex) e subir em DOIS
-lugares (`.dev.vars` local E `npx wrangler secret put <NOME>` em producao):
-`ACCOUNT_STATUS_HOOK_SECRET`, `MESSAGE_HOOK_SECRET`, `ASAAS_HOOK_TOKEN`,
-`ADMIN_API_KEY`. Gerar cada um com:
-
-```bash
-node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
-```
-
-**Destrava:** hooks de status/mensagem (reconexao automatizada e webhooks ao
-cliente, apos `npm run webhook:register`) e a API `/admin`.
+### 2.2 Gerar e subir os secrets da fase 2 - FEITO em 2026-09-01
+Os 4 secrets (`ACCOUNT_STATUS_HOOK_SECRET`, `MESSAGE_HOOK_SECRET`,
+`ASAAS_HOOK_TOKEN`, `ADMIN_API_KEY`) foram gerados, gravados no `.dev.vars` e
+subidos em producao, junto com `PUBLIC_BASE_URL`. O webhook `account-status` ja
+foi registrado na Unipile (id `0Az3LTd7R4ejVAX_7vE_4g`). O webhook `messaging`
+fica para DEPOIS do banco voltar (mensagens chegam o tempo todo e falhariam
+contra um banco morto): `npm run webhook:register -- messaging`.
 
 ---
 

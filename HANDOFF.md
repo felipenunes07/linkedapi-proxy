@@ -50,8 +50,12 @@ Os 3 endpoints do proxy: `POST /v1/messages`, `POST /v1/invitations`,
   `SUPABASE_SERVICE_ROLE_KEY` e aplicar as migrations 0001-0007 (um comando:
   colar `supabase/bootstrap.sql` no SQL Editor). Sem banco não há prova real
   de chave nem de auto-conexão.
-- **Cloudflare: sem login.** `wrangler whoami` não autenticado nesta máquina;
-  o deploy precisa da conta do Victor (`npx wrangler login`).
+- **Cloudflare: DEPLOYADO (2026-09-01).** Worker publicado na conta do Victor:
+  `https://linkedapi-proxy.victor-58a.workers.dev` (`/health` ok, `/docs` no ar,
+  KV RATE_LIMIT criado, 4 secrets subidos, `PUBLIC_BASE_URL` preenchido no
+  `.dev.vars`, server do `openapi.json` atualizado). Login do wrangler feito com
+  o OAuth do Felipe, que tem acesso à conta do Victor; `account_id` fixado no
+  `wrangler.jsonc`.
 
 ## O que entrou em 2026-08-20 (além do que já havia)
 

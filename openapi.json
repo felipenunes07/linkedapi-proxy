@@ -7,8 +7,8 @@
   },
   "servers": [
     {
-      "url": "https://api.linkedapi.com.br",
-      "description": "Producao (substitua pela URL informada junto com sua chave)"
+      "url": "https://linkedapi-proxy.victor-58a.workers.dev",
+      "description": "Producao (workers.dev interino; muda quando linkedapi.com.br for registrado)"
     },
     {
       "url": "http://localhost:8787",
