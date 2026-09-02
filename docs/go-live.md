@@ -50,15 +50,15 @@ npm run prova:chave -- <tenant_id>
 
 ## D. Prova real do Marco 4 (auto-conexao)
 
-- [ ] Gerar link para um tenant de teste: `npm run connect:link -- <tenant_id>`.
-- [ ] [VOCE] Alguem de fora conecta o proprio LinkedIn pelo link (sem tocar no
-      painel da Unipile).
-- [ ] Conferir com `npm run tenant:list`: conta nova no tenant certo, ativa.
-      No Supabase, o `connect_token` correspondente deve estar `used`.
-- [ ] IMPORTANT: se o callback responder 401 `account_verification_failed` com
-      fluxo legitimo, e o follow-up da spec: confirmar se a Unipile devolve o
-      nosso token no campo `name` de `GET /accounts/{id}` e ajustar a ancora
-      (specs/marco-4-auto-conexao.md, follow-ups).
+- [x] MECANISMO PASS em producao (2026-09-02): link gerado, wizard concluido,
+      notify -> callback consumiu o token e gravou a conta AUTOMATICAMENTE no
+      tenant certo, zero toque manual. O follow-up da ancora aconteceu como
+      previsto e foi corrigido (M4.11: ancora temporal; a Unipile renomeia a
+      conta e nao devolve o token no `name`).
+- [ ] DEFERRED (decisao 2026-09-02): a prova com pessoa EXTERNA conectando o
+      PROPRIO LinkedIn fica para o PRIMEIRO ONBOARDING REAL de cliente, que e
+      a evidencia final. Nao esta concluida; nao bloqueia o avanco. (A conexao
+      de teste usou um LinkedIn interno em duplicidade; duplicada removida.)
 - [ ] Reconectar a conta do Victor (status CREDENTIALS na conta-mestra):
       `npm run connect:reconnect -- <tenant_id_do_victor>`.
 
@@ -68,8 +68,12 @@ npm run prova:chave -- <tenant_id>
       B (Dennis) em `POST /v1/messages` -> Unipile recusou com 403 -> proxy
       devolveu `502 {error: upstream_error, upstream_status: 403}`, nada foi
       enviado. A Unipile recusa; nao precisa validar posse no servidor.
-- [ ] Pessoa nao-dev recebe SO chave + link do `/docs` e envia mensagem e
-      convite sozinha, sem nunca ver a palavra Unipile (promessa da V1).
+- [ ] DEFERRED (decisao 2026-09-02): pessoa nao-dev com SO chave + `/docs`
+      envia mensagem e convite sozinha. Evidencia final no PRIMEIRO ONBOARDING
+      REAL de cliente. Nao concluida; nao bloqueia o avanco. Nota: o wizard da
+      hosted auth mostra `account.unipile.com` na URL (a promessa "nunca ve a
+      palavra Unipile" depende de dominio proprio na hosted auth, config a
+      parte na Unipile).
 
 ## F. Ativacao da fase 2 (depois do deploy)
 

@@ -32,7 +32,7 @@ humana** (logins, contas, gente testando): [ACOES-HUMANAS.md](ACOES-HUMANAS.md).
 | Marco 2 | Supabase + isolamento multi-tenant | ✅ código + verificado no real |
 | Marco 3 | 3 endpoints da V1 + rate limit | ✅ código + verificado no real |
 | Marco 5 | Docs (Scalar) + emissão/revogação de chave | ✅ **PROVADO no real em 2026-09-01** (local E workers.dev: emite -> 200 -> revoga -> 401) |
-| Marco 4 | Auto-conexão (hosted auth) | ✅ código + 22 testes; **falta só a prova com pessoa externa** |
+| Marco 4 | Auto-conexão (hosted auth) | ✅ **mecanismo PASS em produção 2026-09-02** (callback + token + tenant + vínculo automático, âncora M4.11); prova com pessoa EXTERNA e teste não-dev: **DEFERRED, o 1º onboarding real é a evidência final** |
 | Fase 2 | Billing, webhooks, planos, reconexão, admin | ✅ código + secrets em produção + webhooks account-status e messaging registrados e com smoke OK; **falta Asaas** ([specs/fase-2.md](specs/fase-2.md)) |
 
 Provas reais executadas em 2026-09-01 (contra Supabase + Unipile + LinkedIn reais):
@@ -43,6 +43,17 @@ Provas reais executadas em 2026-09-01 (contra Supabase + Unipile + LinkedIn reai
 - Chave inválida e ausente -> 401 (`invalid_api_key` / `missing_api_key`).
 - Webhook `message-received` (produção): sem secret 401, payload vazio 400,
   conta desconhecida `{ok, ignored}`. Fail-closed confirmado.
+
+Provas de 2026-09-02 (Marco 4 em produção):
+- Hosted auth ponta a ponta: wizard -> notify -> callback consumiu o token
+  (uso único) -> conta gravada AUTOMATICAMENTE no tenant certo, zero toque
+  manual. A âncora M4.11 decidiu (a Unipile renomeia a conta; ver decisões).
+- Ressalva: a conexão de teste usou um LinkedIn interno (o do Felipe, em
+  duplicidade; a duplicada foi apagada da Unipile e o vínculo marcado
+  `disconnected`). Por decisão de 2026-09-02, a prova com pessoa EXTERNA e o
+  teste não-dev (`/docs` + chave, PRD seção 6) ficam **DEFERRED**: o PRIMEIRO
+  ONBOARDING REAL de cliente é a evidência final das duas provas. Não estão
+  concluídas; não bloqueiam o avanço.
 
 Os 3 endpoints do proxy: `POST /v1/messages`, `POST /v1/invitations`,
 `GET /v1/chats`; self-service: `POST /v1/keys/rotate` e `PUT/GET/DELETE
