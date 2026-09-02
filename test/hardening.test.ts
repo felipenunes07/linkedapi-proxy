@@ -245,6 +245,97 @@ describe('erro upstream (502) nos 3 endpoints', () => {
     },
   );
 
+  it.each([[403], [404]] as const)(
+    'F2.13 messages: upstream %i vira 404 not_found unico (sem oraculo, sem upstream_status)',
+    async (upstream) => {
+      const env = baseEnv();
+      vi.mocked(sendMessage).mockResolvedValue(
+        jsonResponse({ detail: `dsn-interno-e-${ACCT}` }, upstream),
+      );
+      const res = await postJson(
+        env,
+        '/v1/messages',
+        JSON.stringify({ chat_id: 'c-de-outro-tenant', text: 'oi' }),
+      );
+      expect(res.status).toBe(404);
+      const text = await res.text();
+      expect(JSON.parse(text)).toEqual({ error: 'not_found' });
+      expect(text).not.toContain(ACCT);
+      expect(text).not.toContain('upstream');
+      // Nao consome cota.
+      expect(await env.RATE_LIMIT.get(counterKeyHoje('t1', 'messages'))).toBeNull();
+    },
+  );
+
+  it('F2.13 invitations: upstream 404 vira not_found (sem vazar corpo, sem cota); 403 do provider segue 502', async () => {
+    const env = baseEnv();
+    vi.mocked(sendInvitation).mockResolvedValueOnce(
+      jsonResponse({ detail: `dsn-interno-e-${ACCT}` }, 404),
+    );
+    const res404 = await postJson(
+      env,
+      '/v1/invitations',
+      JSON.stringify({ provider_id: 'perfil-inexistente' }),
+    );
+    expect(res404.status).toBe(404);
+    const text404 = await res404.text();
+    expect(JSON.parse(text404)).toEqual({ error: 'not_found' });
+    expect(text404).not.toContain(ACCT);
+    expect(
+      await env.RATE_LIMIT.get(counterKeyHoje('t1', 'invitations')),
+    ).toBeNull();
+
+    vi.mocked(sendInvitation).mockResolvedValueOnce(jsonResponse({}, 403));
+    const res403 = await postJson(
+      env,
+      '/v1/invitations',
+      JSON.stringify({ provider_id: 'p1' }),
+    );
+    expect(res403.status).toBe(502);
+    expect(await res403.json()).toEqual({
+      error: 'upstream_error',
+      upstream_status: 403,
+    });
+  });
+
+  it('F2.13: o conjunto mapeado e exatamente {403,404}; upstream 401 em messages segue 502', async () => {
+    vi.mocked(sendMessage).mockResolvedValue(jsonResponse({}, 401));
+    const res = await postJson(
+      baseEnv(),
+      '/v1/messages',
+      JSON.stringify({ chat_id: 'c1', text: 'oi' }),
+    );
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({
+      error: 'upstream_error',
+      upstream_status: 401,
+    });
+  });
+
+  it('rota inexistente responde no ErrorEnvelope (nao o texto padrao do Hono)', async () => {
+    const res = await app.request(
+      '/v1/rota-que-nao-existe',
+      { method: 'GET', headers: { 'X-API-KEY': KEY } },
+      baseEnv(),
+    );
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: 'not_found' });
+  });
+
+  it('F2.13 chats: colecao sem recurso, 403 upstream segue 502 (sem mapeamento)', async () => {
+    vi.mocked(listChats).mockResolvedValue(jsonResponse({}, 403));
+    const res = await app.request(
+      '/v1/chats',
+      { method: 'GET', headers: { 'X-API-KEY': KEY } },
+      baseEnv(),
+    );
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({
+      error: 'upstream_error',
+      upstream_status: 403,
+    });
+  });
+
   it('502 nao consome cota; escrita aceita depois consome', async () => {
     const env = baseEnv();
     vi.mocked(sendMessage).mockResolvedValueOnce(jsonResponse({}, 500));

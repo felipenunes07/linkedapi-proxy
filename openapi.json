@@ -50,6 +50,7 @@
           },
           "400": { "$ref": "#/components/responses/BadRequest" },
           "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" },
           "429": { "$ref": "#/components/responses/RateLimited" },
           "502": { "$ref": "#/components/responses/UpstreamError" }
         }
@@ -85,6 +86,7 @@
           },
           "400": { "$ref": "#/components/responses/BadRequest" },
           "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFoundProfile" },
           "429": { "$ref": "#/components/responses/RateLimited" },
           "502": { "$ref": "#/components/responses/UpstreamError" }
         }
@@ -483,6 +485,24 @@
           "application/json": {
             "schema": { "$ref": "#/components/schemas/ErrorEnvelope" },
             "example": { "error": "upstream_error", "upstream_status": 500 }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "O recurso informado nao existe para a sua conta (id inexistente ou de outra conta).",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/ErrorEnvelope" },
+            "example": { "error": "not_found" }
+          }
+        }
+      },
+      "NotFoundProfile": {
+        "description": "O perfil informado nao existe.",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/ErrorEnvelope" },
+            "example": { "error": "not_found" }
           }
         }
       }

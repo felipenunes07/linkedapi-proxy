@@ -8,15 +8,12 @@ esta em [../ACOES-HUMANAS.md](../ACOES-HUMANAS.md).
 
 Atualizado em 2026-08-20.
 
-## Bloqueia tudo
+## Bloqueia tudo - RESOLVIDO (2026-09-01)
 
-- [ ] **Banco Supabase.** O projeto `voojvcdihyymewrhrlti` (conta do Victor)
-      sumiu do DNS. Decisao tomada: Victor restaura/recria e nos passa
-      `SUPABASE_URL` + service role key. Depois: colar `supabase/bootstrap.sql`
-      no SQL Editor (agora inclui as migrations 0001-0007).
-- [ ] **Login Cloudflare** (`npx wrangler login`, conta do Victor) e deploy
-      (`npm run deploy:setup` + `npm run deploy`). Sem URL publica nao ha
-      hosted auth nem webhooks.
+- [x] **Banco Supabase.** Victor restaurou o `voojvcdihyymewrhrlti` (mesma
+      URL/key); `bootstrap.sql` aplicado e conferido.
+- [x] **Cloudflare.** Deploy feito na conta do Victor:
+      `https://linkedapi-proxy.victor-58a.workers.dev` (KV + 9 secrets).
 
 ## Provas reais (depois de banco + deploy)
 
@@ -37,11 +34,9 @@ Atualizado em 2026-08-20.
 
 ## Fase 2: ativacao (depois do deploy)
 
-- [ ] Gerar e subir os secrets novos (em `.dev.vars` E `wrangler secret put`):
-      `ACCOUNT_STATUS_HOOK_SECRET`, `MESSAGE_HOOK_SECRET`, `ASAAS_HOOK_TOKEN`,
-      `ADMIN_API_KEY` (e opcionais `SEAT_CAP`, `PUBLIC_BASE_URL` no Worker).
-- [ ] Registrar os webhooks na origem: `npm run webhook:register --
-      account-status` e `-- messaging`.
+- [x] Secrets gerados e em producao (2026-09-01), incluindo `PUBLIC_BASE_URL`.
+- [x] Webhooks registrados na origem (2026-09-01/02): `account-status` e
+      `messaging`, smoke fail-closed OK.
 - [ ] **Conta Asaas** (criar/usar a da empresa; ACAO DO DONO): gerar
       `ASAAS_API_KEY`, configurar o webhook de cobranca no painel apontando
       para `{PUBLIC_BASE_URL}/hooks/billing` com o token no header
@@ -80,3 +75,13 @@ Atualizado em 2026-08-20.
       409 account_disconnected/account_paused reduz ticket de suporte); teto de
       chaves ativas por tenant na rotacao; mover webhook_url/secret para tabela
       propria (hoje em tenants; qualquer select:* futuro ali vazaria o secret).
+
+## Achado do review F2.13 (importante, nao bloqueia o 1o cliente)
+
+- Teto de TENTATIVAS nas escritas: hoje so escrita ACEITA consome cota (M3.10,
+  correto), mas tentativas que falham (400/404/502) nao contam em nada: uma
+  chave valida pode martelar POST /v1/messages com chat_id arbitrario sem
+  limite (custo e risco de throttle na conta-mestra; vetor de enumeracao
+  residual apos o F2.13). Fix sugerido: segundo contador KV de tentativas
+  (aceitas + falhas) com teto ~10x o limite diario, checado no middleware,
+  fail-closed. Nao viola M3.10.

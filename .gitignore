@@ -23,3 +23,5 @@ CLAUDE.local.md
 .DS_Store
 coverage/
 .vitest/
+# Supabase CLI (pode conter refs/credenciais de pooler)
+supabase/.temp/

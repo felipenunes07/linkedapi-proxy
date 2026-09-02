@@ -31,6 +31,10 @@ app.onError((err, c) => {
   return c.json({ error: 'internal_error' }, 500);
 });
 
+// Rota inexistente no ErrorEnvelope tambem (404 agora e status documentado da
+// API; o texto padrao do Hono destoaria da superficie publica).
+app.notFound((c) => c.json({ error: 'not_found' }, 404));
+
 app.get('/health', (c) => c.json({ ok: true }));
 
 // Documentacao publica (sem auth). E a superficie que a pessoa de teste abre
@@ -56,6 +60,16 @@ app.route('/admin', admin);
 // Rotas protegidas da V1 (implementar por marco).
 const v1 = new Hono<{ Bindings: Env; Variables: Variables }>();
 v1.use('*', authMiddleware);
+
+// Mapeamento de erro upstream por semantica de recurso (F2.13):
+// - /messages (chat_id e recurso PRIVADO da conta): upstream 403 ou 404 vira
+//   404 not_found unico, sem upstream_status. Nao distinguir "nao existe" de
+//   "existe mas nao e seu" evita oraculo cross-tenant (provado no real em
+//   2026-09-01: chat de outro tenant -> 403 da Unipile).
+// - /invitations (provider_id e perfil PUBLICO): so upstream 404 vira
+//   not_found; 403 do provider (limite, bloqueio) segue como upstream_error.
+// - /chats (colecao, sem recurso no request): sem mapeamento.
+const MESSAGES_NOT_FOUND_UPSTREAM = new Set([403, 404]);
 
 // Rate limit so nas acoes de escrita (restringem contas no LinkedIn). Listar
 // chats e leitura, sem limite. Cada acao tem seu proprio contador/limite.
@@ -86,12 +100,22 @@ v1.post('/messages', async (c) => {
   const res = await sendMessage(c.env, chat_id, text, tenant.unipileAccountId);
 
   if (!res.ok) {
+    // Recurso inexistente OU de outra conta: 404 unico, sem detalhe (F2.13).
+    if (MESSAGES_NOT_FOUND_UPSTREAM.has(res.status)) {
+      // Sinal interno (review F2.13): um 403 aqui tambem pode ser conta com
+      // sessao caida na janela do webhook, e um not_found silencioso
+      // esconderia isso do operador. So tenant (uuid nosso) + status.
+      console.warn(
+        `messages_not_found: tenant=${tenant.tenantId} upstream=${res.status}`,
+      );
+      return c.json({ error: 'not_found' }, 404);
+    }
     // Normaliza o erro. Nao repassa corpo/detail cru da Unipile (pode carregar
     // DSN/host/account_id da conta-mestra). So o status upstream, que e inocuo.
     return c.json({ error: 'upstream_error', upstream_status: res.status }, 502);
   }
 
-  // Escrita aceita: conta a cota so agora (nao penaliza 400/502).
+  // Escrita aceita: conta a cota so agora (nao penaliza 400/404/502).
   await recordUsage(c.env.RATE_LIMIT, tenant.tenantId, 'messages');
   persistUsage(c, tenant.tenantId, 'messages');
 
@@ -134,6 +158,14 @@ v1.post('/invitations', async (c) => {
   );
 
   if (!res.ok) {
+    // Perfil inexistente: 404 unico (F2.13). 403 do provider (limite,
+    // bloqueio) NAO e not_found e segue como upstream_error.
+    if (res.status === 404) {
+      console.warn(
+        `invitations_not_found: tenant=${tenant.tenantId} upstream=404`,
+      );
+      return c.json({ error: 'not_found' }, 404);
+    }
     // So o status upstream, nunca o corpo cru da Unipile (pode carregar
     // DSN/host/account_id da conta-mestra). Mesma politica de /messages.
     return c.json({ error: 'upstream_error', upstream_status: res.status }, 502);
