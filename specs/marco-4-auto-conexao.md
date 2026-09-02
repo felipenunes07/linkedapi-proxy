@@ -104,13 +104,13 @@ custom).
 ## Follow-ups conscientes
 
 - O notify sem assinatura e mitigado por token de uso unico + verificacao
-  upstream com correlacao por `name`; se a Unipile documentar HMAC, adotar.
-- CONFIRMAR NO PRIMEIRO TESTE REAL: (a) que `GET /accounts/{id}` devolve o
-  nosso token no campo `name` da conta criada via hosted auth (o codigo exige
-  isso e FALHA FECHADO; se a Unipile nao devolver, ajustar a checagem com
-  outra ancora, ex. `created_at` da conta posterior ao do token); (b) que o
-  reconnect notifica `RECONNECTED` e o create `CREATION_SUCCESS` (mapeamento
-  estrito no codigo).
+  upstream; se a Unipile documentar HMAC, adotar.
+- CONFIRMADO NO PRIMEIRO TESTE REAL (2026-09-02): a Unipile NAO devolve o
+  token no `name` da conta (renomeia para o nome do perfil). A ancora foi
+  ajustada exatamente como este follow-up previa: `created_at` da conta
+  posterior ao do token, com teto de recencia de 30min e folga de 60s
+  (decisao M4.11; igualdade de `name` mantida como fast-path). O create
+  notifica `CREATION_SUCCESS` (confirmado no real).
 - `GET /hooks/connect` nao existe (so POST); a Unipile nao faz GET de validacao.
 - Posse de `chat_id` (pre-existente, Marco 3): rodar o teste real cross-tenant
   antes de clientes; se a Unipile nao recusar chat de outra conta mesmo com o

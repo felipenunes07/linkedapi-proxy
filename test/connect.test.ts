@@ -7,8 +7,10 @@ import type { Env } from '../src/types';
 //   2. consumo ATOMICO do token (pending -> used) antes de qualquer escrita:
 //      replay/reuso morre com 401;
 //   3. purpose do token amarrado ao status do notify (create != reconnect);
-//   4. verificacao upstream: conta existe, e LINKEDIN e (no create) carrega o
-//      nosso token no campo name; reconnect SO reativa conta do proprio tenant;
+//   4. verificacao upstream: conta existe, e LINKEDIN e (no create) foi criada
+//      DEPOIS do token deste link e recentemente (ancora temporal M4.11; a
+//      igualdade de name segue como fast-path); reconnect SO reativa conta do
+//      proprio tenant;
 //   5. conflito cross-tenant nunca re-vincula e nao vira oraculo.
 // Data layer e Unipile mockados; o hash do token e o real (mesmo do Worker).
 
@@ -33,13 +35,15 @@ const db: { connect_tokens: Row[]; connected_accounts: Row[] } = {
   connected_accounts: [],
 };
 
-// Interpreta os operadores PostgREST usados pelo codigo: eq., gt., in.().
+// Interpreta os operadores PostgREST usados pelo codigo: eq., neq., gt., in.().
 function matches(row: Row, filters: Record<string, string>): boolean {
   for (const [key, value] of Object.entries(filters)) {
     if (key === 'select' || key === 'limit' || key === 'order') continue;
     const field = String(row[key]);
     if (value.startsWith('eq.')) {
       if (field !== value.slice(3)) return false;
+    } else if (value.startsWith('neq.')) {
+      if (field === value.slice(4)) return false;
     } else if (value.startsWith('gt.')) {
       if (!(field > value.slice(3))) return false;
     } else if (value.startsWith('in.(')) {
@@ -120,11 +124,14 @@ function notify(body: unknown, e: Env = env) {
   );
 }
 
-function linkedinAccount(name: string): Response {
-  return new Response(JSON.stringify({ id: 'x', type: 'LINKEDIN', name }), {
-    status: 200,
-    headers: { 'content-type': 'application/json' },
-  });
+function linkedinAccount(name: string, createdAt?: string): Response {
+  return new Response(
+    JSON.stringify({ id: 'x', type: 'LINKEDIN', name, created_at: createdAt }),
+    {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    },
+  );
 }
 
 const FUTURO = '2099-01-01T00:00:00.000Z';
@@ -239,6 +246,98 @@ describe('POST /hooks/connect (create)', () => {
     expect(accountRow(UA_NOVA)).toBeUndefined();
     // Token queimado mesmo assim (comportamento seguro: operador gera outro).
     expect(tokenRow('tok-A')?.status).toBe('used');
+  });
+
+  it('M4.11: name renomeado pelo provider mas conta criada DEPOIS do token: vincula', async () => {
+    // Caso real de 2026-09-02: a Unipile renomeia a conta para o nome do
+    // perfil; a ancora temporal (conta criada apos o token E recente) decide
+    // no lugar da igualdade de name.
+    const tok = tokenRow('tok-A');
+    if (tok) tok.created_at = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    vi.mocked(getAccount).mockResolvedValue(
+      linkedinAccount(
+        'Perfil Renomeado',
+        new Date(Date.now() - 60 * 1000).toISOString(),
+      ),
+    );
+    const res = await notify({
+      status: 'CREATION_SUCCESS',
+      account_id: UA_NOVA,
+      name: TOKEN_A,
+    });
+    expect(res.status).toBe(200);
+    expect(accountRow(UA_NOVA)).toMatchObject({ tenant_id: 'tA', status: 'active' });
+    expect(tokenRow('tok-A')?.status).toBe('used');
+    // Vinculo por ancora temporal gera o sinal interno de auditoria.
+    const lines = errorSpy.mock.calls.map((call) => String(call[0]));
+    expect(lines.some((l) => l.includes('connect_anchor_temporal'))).toBe(true);
+  });
+
+  it('M4.11: conta PRE-EXISTENTE (criada ANTES do token, name diferente): 401, nada e gravado', async () => {
+    const tok = tokenRow('tok-A');
+    if (tok) tok.created_at = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    vi.mocked(getAccount).mockResolvedValue(
+      linkedinAccount('Conta Antiga Manual', '2000-06-01T00:00:00.000Z'),
+    );
+    const res = await notify({
+      status: 'CREATION_SUCCESS',
+      account_id: UA_NOVA,
+      name: TOKEN_A,
+    });
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: 'account_verification_failed' });
+    expect(accountRow(UA_NOVA)).toBeUndefined();
+  });
+
+  it('M4.11: conta criada apos o token mas VELHA demais (fora do teto de recencia): 401', async () => {
+    const tok = tokenRow('tok-A');
+    if (tok)
+      tok.created_at = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    vi.mocked(getAccount).mockResolvedValue(
+      linkedinAccount(
+        'Perfil Renomeado',
+        new Date(Date.now() - 90 * 60 * 1000).toISOString(),
+      ),
+    );
+    const res = await notify({
+      status: 'CREATION_SUCCESS',
+      account_id: UA_NOVA,
+      name: TOKEN_A,
+    });
+    expect(res.status).toBe(401);
+    expect(accountRow(UA_NOVA)).toBeUndefined();
+  });
+
+  it('M4.11: conta SEM created_at (ancora indisponivel): 401 fail-closed + sinal interno', async () => {
+    const tok = tokenRow('tok-A');
+    if (tok) tok.created_at = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    vi.mocked(getAccount).mockResolvedValue(
+      linkedinAccount('Perfil Renomeado', undefined),
+    );
+    const res = await notify({
+      status: 'CREATION_SUCCESS',
+      account_id: UA_NOVA,
+      name: TOKEN_A,
+    });
+    expect(res.status).toBe(401);
+    expect(accountRow(UA_NOVA)).toBeUndefined();
+    const lines = errorSpy.mock.calls.map((call) => String(call[0]));
+    expect(lines.some((l) => l.includes('connect_anchor_unavailable'))).toBe(true);
+  });
+
+  it('M4.11: created_at malformado: 401 fail-closed', async () => {
+    const tok = tokenRow('tok-A');
+    if (tok) tok.created_at = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    vi.mocked(getAccount).mockResolvedValue(
+      linkedinAccount('Perfil Renomeado', 'nao-e-uma-data'),
+    );
+    const res = await notify({
+      status: 'CREATION_SUCCESS',
+      account_id: UA_NOVA,
+      name: TOKEN_A,
+    });
+    expect(res.status).toBe(401);
+    expect(accountRow(UA_NOVA)).toBeUndefined();
   });
 
   it('conta ja vinculada a OUTRO tenant: resposta generica, nunca re-vincula, sinal interno', async () => {

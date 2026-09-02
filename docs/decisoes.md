@@ -98,6 +98,7 @@ motivo. Detalhe completo em @PRD.md secao 3 e 5.
 | M4.8 | 1 seat = 1 conta: vincular conta nova desativa as demais ativas do tenant; `resolveTenant` ordena `created_at.desc` | Sem isso um segundo connect:link acumulava contas ativas e a chave do tenant agia por uma linha nao deterministica (PostgREST sem order). | Firme |
 | M4.9 | `app.onError` responde `{error: internal_error}` 500 e loga so `name: message` | Throw nao tratado caia no default do Hono (texto fora do ErrorEnvelope, log do objeto cru). Mensagens internas sao codigos sem segredo. | Firme |
 | M4.10 | `PUBLIC_BASE_URL` exige `https://` no script | O notify carrega o token em claro no corpo; nunca por http. | Firme |
+| M4.11 | Ancora do create: igualdade de `name` OU conta criada DEPOIS do token (created_at, folga 60s) | Confirmado no real (2026-09-02): a Unipile renomeia a conta para o nome do perfil, o token nao persiste no `name` da conta; a igualdade pura rejeitava todo fluxo legitimo (token queimado, conta orfa, vinculo manual pelo operador). Conta pre-existente segue impossivel de vincular: created_at antigo falha na ancora temporal. Data ausente/malformada falha fechado (401). | Firme |
 
 ## Fase 2 (billing, webhooks, planos, admin) - decisoes
 
@@ -122,6 +123,6 @@ Spec completa em specs/fase-2.md.
 - Registrar o dominio da API (`linkedapi.com.br`); nome LinkedAPI ja em uso nos docs.
 - ~~Valores default do rate limiter~~ RESOLVIDO no Marco 3 (M3.5: 80 msgs/dia, 30 convites/dia).
 - ~~Provedor de rate limit: KV vs Upstash~~ RESOLVIDO no Marco 3 (M3.4: Cloudflare KV).
-- Infra do banco: o projeto Supabase `voojvcdihyymewrhrlti` (M2.1) nao resolve mais no DNS
-  (pausado/deletado). Escolher/criar projeto novo e reapontar `SUPABASE_URL` +
-  aplicar migrations 0001-0007 (bootstrap.sql) antes das provas reais.
+- ~~Infra do banco: projeto Supabase sumiu do DNS~~ RESOLVIDO em 2026-09-01: o
+  Victor restaurou o `voojvcdihyymewrhrlti` (mesma URL/key) e o bootstrap.sql
+  foi aplicado; provas reais executadas (ver HANDOFF).

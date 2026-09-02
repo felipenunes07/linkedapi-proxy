@@ -20,14 +20,15 @@ Atualizado em 2026-08-20.
 
 ## Provas reais (depois de banco + deploy)
 
-- [ ] Prova da chave (Marco 5): `npm run prova:chave -- <tenant_id>`.
+- [x] Prova da chave (Marco 5): PASS em 2026-09-01 (local e workers.dev).
 - [ ] Prova da auto-conexao (Marco 4): alguem de fora conecta pelo link.
-      CONFIRMAR na primeira rodada: (a) `GET /accounts/{id}` devolve nosso
-      token no campo `name` (o callback exige e falha fechado); (b) mapeamento
-      de status create=CREATION_SUCCESS / reconnect=RECONNECTED.
-- [ ] Isolamento cross-tenant real (chave A + chat_id real de B deve falhar) e
-      o guard de posse de chat_id (se a Unipile nao recusar, validar posse no
-      servidor antes do envio).
+      CONFIRMADO em 2026-09-02: a Unipile NAO devolve o token no `name` da
+      conta (renomeia para o nome do perfil); a ancora agora e temporal
+      (decisao M4.11). Status CREATION_SUCCESS confirmado no real.
+      REGRA OPERACIONAL: nao conectar conta manualmente no painel da Unipile
+      enquanto houver connect_token `create` pendente (janela da ancora).
+- [x] Isolamento cross-tenant real: PASS em 2026-09-01 (Unipile recusou com
+      403; proxy 502 sem enviar nada; guard de posse desnecessario).
 - [ ] Teste da pessoa nao-dev so com chave + `/docs` (promessa da V1).
 - [ ] Reconectar a conta do Victor (status CREDENTIALS na conta-mestra).
 - [ ] Payload real do webhook `messaging` da origem: conferir os nomes de campo

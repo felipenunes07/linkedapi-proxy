@@ -20,8 +20,9 @@ import { attemptKey, bumpAttempts } from '../lib/throttle';
 //      que o proprio tenant ja tem. Um token nunca serve para o outro fluxo.
 //   4. VERIFICACAO UPSTREAM: o notify nao tem assinatura documentada. So
 //      vinculamos conta que a Unipile confirma existir na conta-mestra, ser
-//      LINKEDIN e (no create) carregar o nosso token no campo `name` (e o
-//      mecanismo oficial de correlacao: o que enviamos no link volta na conta).
+//      LINKEDIN e (no create) ter sido criada DEPOIS do token deste link
+//      (ancora temporal; a Unipile renomeia a conta para o nome do perfil,
+//      entao o token no `name` da conta nao e confiavel - decisao M4.11).
 //   5. BANCO: unique em connected_accounts.unipile_account_id (migration 0002)
 //      garante que uma conta nunca aponta para dois tenants, mesmo sob corrida.
 //
@@ -33,6 +34,7 @@ interface ConnectTokenRow {
   id: string;
   tenant_id: string;
   purpose: string;
+  created_at: string;
 }
 
 interface ConnectedAccountRow {
@@ -44,7 +46,15 @@ interface ConnectedAccountRow {
 interface UnipileAccount {
   type?: string;
   name?: string;
+  created_at?: string;
 }
+
+// Folga de relogio entre o nosso banco e a Unipile na ancora temporal do
+// create (ver comentario no uso). Curta de proposito.
+const ANCHOR_CLOCK_SKEW_MS = 60 * 1000;
+// Teto de recencia da ancora: a conta tem que ter nascido DENTRO da sessao
+// deste link (o notify legitimo chega segundos apos a criacao).
+const ANCHOR_MAX_AGE_MS = 30 * 60 * 1000;
 
 // purpose do token -> status de notify que ele aceita. Estrito de proposito:
 // confirmar no primeiro teste real se a Unipile usa outros valores.
@@ -174,12 +184,40 @@ connectHooks.post('/', async (c) => {
     return c.json({ ok: true });
   }
 
-  // purpose create: correlacao forte. O `name` que enviamos no link e o
-  // mecanismo oficial de correlacao da hosted auth; a conta criada por este
-  // link carrega o token. Conta com outro name (ex.: conectada manualmente)
-  // NAO pode ser vinculada por este callback.
-  if (account.name !== name) {
+  // purpose create: correlacao. O `name` que enviamos no link volta no NOTIFY
+  // (e o token, ja validado por hash acima), mas a Unipile NAO mantem o token
+  // no `name` da CONTA: renomeia para o nome do perfil apos a criacao
+  // (confirmado no real em 2026-09-02; decisao M4.11). A ancora contra vincular
+  // conta pre-existente (ex.: conectada manualmente) passa a ser temporal: a
+  // conta precisa ter sido criada DEPOIS do token deste link. Igualdade de
+  // `name` segue aceita como fast-path caso a Unipile preserve o valor.
+  const accountCreatedAt =
+    typeof account.created_at === 'string'
+      ? Date.parse(account.created_at)
+      : NaN;
+  const tokenCreatedAt =
+    typeof token.created_at === 'string' ? Date.parse(token.created_at) : NaN;
+  // Teto de recencia (review M4.11): no fluxo legitimo o notify chega segundos
+  // apos a criacao da conta. O teto impede vincular conta criada por OUTRO
+  // caminho (ex.: manualmente no painel) horas antes, dentro da validade do
+  // token.
+  const createdByThisFlow =
+    Number.isFinite(accountCreatedAt) &&
+    Number.isFinite(tokenCreatedAt) &&
+    accountCreatedAt >= tokenCreatedAt - ANCHOR_CLOCK_SKEW_MS &&
+    Date.now() - accountCreatedAt <= ANCHOR_MAX_AGE_MS + ANCHOR_CLOCK_SKEW_MS;
+  if (account.name !== name && !createdByThisFlow) {
+    if (!Number.isFinite(accountCreatedAt)) {
+      // Unipile sem created_at na conta: a ancora nao tem como decidir e o
+      // token queima em silencio (o mesmo sintoma do bug M4 original). Sinal
+      // interno so com o uuid do token.
+      console.error(`connect_anchor_unavailable token=${token.id}`);
+    }
     return c.json({ error: 'account_verification_failed' }, 401);
+  }
+  if (account.name !== name) {
+    // Vinculo decidido SO pela ancora temporal: sinal interno para auditoria.
+    console.error(`connect_anchor_temporal token=${token.id}`);
   }
 
   const existing = await supabaseSelect<ConnectedAccountRow>(
@@ -213,15 +251,6 @@ connectHooks.post('/', async (c) => {
     return c.json({ ok: true });
   }
 
-  // 1 seat = 1 conta: antes de vincular a nova, desativa qualquer outra conta
-  // ativa do tenant (a resolucao no auth pegaria uma linha arbitraria).
-  await supabaseUpdate(
-    c.env,
-    'connected_accounts',
-    { tenant_id: `eq.${token.tenant_id}`, status: 'eq.active' },
-    { status: 'disconnected' },
-  );
-
   try {
     await supabaseInsert(c.env, 'connected_accounts', {
       tenant_id: token.tenant_id,
@@ -251,6 +280,21 @@ connectHooks.post('/', async (c) => {
       throw err;
     }
   }
+
+  // 1 seat = 1 conta: com a nova linha garantida, desativa as DEMAIS contas
+  // ativas do tenant. Depois do insert de proposito (review M4.11): se o
+  // insert perder a corrida do unique para outro tenant, as contas atuais do
+  // tenant ficam intactas em vez de zeradas.
+  await supabaseUpdate(
+    c.env,
+    'connected_accounts',
+    {
+      tenant_id: `eq.${token.tenant_id}`,
+      status: 'eq.active',
+      unipile_account_id: `neq.${account_id}`,
+    },
+    { status: 'disconnected' },
+  );
 
   // Resposta rapida e sem NENHUM dado interno (account_id nao volta).
   return c.json({ ok: true });
