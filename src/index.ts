@@ -12,6 +12,7 @@ import openapi from '../openapi.json';
 import { docsHtml } from './lib/docs';
 import { connectHooks } from './routes/connect';
 import { eventHooks } from './routes/eventHooks';
+import { checkout } from './routes/checkout';
 import { selfservice } from './routes/selfservice';
 import { admin } from './routes/admin';
 
@@ -56,6 +57,43 @@ app.route('/hooks', eventHooks);
 
 // API administrativa (operador). Sem ADMIN_API_KEY configurada, responde 404.
 app.route('/admin', admin);
+
+// Checkout proprio (F2.14): chamado pelo JS da landing, que vive em outra
+// origem. CORS restrito a lista abaixo (nunca '*': a rota escreve no banco e
+// cria cobranca). Sem ASAAS_API_KEY a rota responde 404 (ver routes/checkout).
+const CHECKOUT_ORIGINS = new Set([
+  'https://linkedapi-site.pages.dev',
+  'https://linkedapi.com.br',
+  'https://www.linkedapi.com.br',
+]);
+
+app.use('/checkout', async (c, next) => {
+  const origin = c.req.header('Origin');
+  const allowed = origin && CHECKOUT_ORIGINS.has(origin);
+  // Origin presente e fora da lista: recusa antes do handler. CORS sozinho nao
+  // impede escrita cross-site (o browser so esconde a RESPOSTA), entao o
+  // bloqueio tem que acontecer aqui. Requisicao sem Origin (curl, server a
+  // server) segue permitida: nao ha browser nem sessao para abusar.
+  if (origin && !allowed) {
+    return c.json({ error: 'forbidden_origin' }, 403);
+  }
+  if (c.req.method === 'OPTIONS') {
+    if (!allowed) return c.body(null, 403);
+    return c.body(null, 204, {
+      'Access-Control-Allow-Origin': origin,
+      'Access-Control-Allow-Methods': 'POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'content-type',
+      'Access-Control-Max-Age': '86400',
+      Vary: 'Origin',
+    });
+  }
+  await next();
+  if (allowed) {
+    c.res.headers.set('Access-Control-Allow-Origin', origin);
+    c.res.headers.set('Vary', 'Origin');
+  }
+});
+app.route('/checkout', checkout);
 
 // Rotas protegidas da V1 (implementar por marco).
 const v1 = new Hono<{ Bindings: Env; Variables: Variables }>();

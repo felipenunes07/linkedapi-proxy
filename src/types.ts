@@ -24,6 +24,16 @@ export interface Env {
   MESSAGE_HOOK_SECRET?: string;
   // Token que o Asaas devolve no header asaas-access-token do webhook de cobranca.
   ASAAS_HOOK_TOKEN?: string;
+  // Chave da API do Asaas (conta financeira). Sem ela, POST /checkout responde
+  // 404: a superficie de cobranca desligada nem aparece. Segredo: so no
+  // servidor, nunca em log nem em resposta.
+  ASAAS_API_KEY?: string;
+  // Base da API do Asaas. Default = producao. Aponte para
+  // https://api-sandbox.asaas.com/v3 em dev, senao `npm run dev` cria cobranca
+  // REAL (achado I6 do review do F2.14).
+  ASAAS_BASE_URL?: string;
+  // Preco mensal por seat, em BRL (default 57).
+  PLAN_PRICE_BRL?: string;
   // Chave da API administrativa (operador). Sem ela, /admin nao existe (404).
   ADMIN_API_KEY?: string;
   // Capacidade de seats do piso da conta-mestra (default 10).
