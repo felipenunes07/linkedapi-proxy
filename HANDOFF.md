@@ -33,7 +33,7 @@ humana** (logins, contas, gente testando): [ACOES-HUMANAS.md](ACOES-HUMANAS.md).
 | Marco 3 | 3 endpoints da V1 + rate limit | ✅ código + verificado no real |
 | Marco 5 | Docs (Scalar) + emissão/revogação de chave | ✅ **PROVADO no real em 2026-09-01** (local E workers.dev: emite -> 200 -> revoga -> 401) |
 | Marco 4 | Auto-conexão (hosted auth) | ✅ **mecanismo PASS em produção 2026-09-02** (callback + token + tenant + vínculo automático, âncora M4.11); prova com pessoa EXTERNA e teste não-dev: **DEFERRED, o 1º onboarding real é a evidência final** |
-| Fase 2 | Billing, webhooks, planos, reconexão, admin | ✅ código + secrets em produção + webhooks account-status e messaging registrados; **billing provado ponta a ponta no Asaas sandbox em 2026-09-03** (pagar → ativa, atrasar → pausa, pagar → despausa); falta só repetir a config na conta Asaas de PRODUÇÃO ([specs/fase-2.md](specs/fase-2.md)) |
+| Fase 2 | Billing, webhooks, planos, reconexão, admin | ✅ **completa em 2026-09-03**: código, secrets, webhooks da Unipile, billing provado ponta a ponta no Asaas sandbox (pagar → ativa, atrasar → pausa, pagar → despausa) e **Asaas de produção configurado** (key real + webhook). Falta só a primeira assinatura real ([specs/fase-2.md](specs/fase-2.md)) |
 
 Provas reais executadas em 2026-09-01 (contra Supabase + Unipile + LinkedIn reais):
 - Marco 5 local e público: PASS (script `prova:chave`, tenant A / conta Márcio).

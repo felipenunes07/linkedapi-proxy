@@ -102,12 +102,18 @@ npm run prova:chave -- <tenant_id>
       - `PAYMENT_CONFIRMED` -> assinatura `active` E conta de volta `active`;
       - assinatura desconhecida -> `{ok, ignored}`, sem efeito;
       - gate fail-closed em producao: sem token 401, payload vazio 400.
-- [ ] [VOCE] PRODUCAO: criar a conta real em asaas.com, gerar a API key real,
-      criar o mesmo webhook (URL e `authToken` iguais; use um e-mail seu de
-      verdade para os alertas de falha) e REMOVER `ASAAS_BASE_URL` do
-      `.dev.vars` (o default ja e producao).
+- [x] **Asaas PRODUCAO configurado (2026-09-03).** `ASAAS_API_KEY` real no
+      `.dev.vars` (`$aact_prod_...`, conferida: producao 200, sandbox 401) e
+      `ASAAS_BASE_URL` REMOVIDA (default = producao). Webhook criado via API
+      (id `d25614cc-959f-48d0-80ea-d06dbd2945a2`), mesma URL, mesmo
+      `authToken`, mesmos 3 eventos, alertas de falha para
+      felipe.arian@playbooklab.com.br. Nenhuma assinatura real existe ainda; a
+      linha de teste do sandbox foi removida de `billing_subscriptions`.
+      NOTA: o GET /webhooks nao devolve o `authToken` (mascarado pelo Asaas);
+      a mesma chamada foi provada no sandbox, onde o evento real passou pelo
+      gate que exige o token. Confirmar no painel se quiser certeza visual.
 - [ ] Primeira assinatura real: `npm run billing:subscribe -- <tenant_id>
-      "<nome>" <cpf_cnpj> <email>`.
+      "<nome>" <cpf_cnpj> <email>`. ATENCAO: cobra de verdade.
 - [ ] Conferir a operacao: `curl -H "X-ADMIN-KEY: ..." <url>/admin/capacity`.
 
 ## G. Acabamento

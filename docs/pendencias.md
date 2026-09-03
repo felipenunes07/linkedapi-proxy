@@ -41,10 +41,11 @@ Atualizado em 2026-08-20.
       criada, webhook da origem chegando, pagar -> ativa / atrasar -> pausa /
       pagar -> despausa, tudo comprovado). Detalhe em [go-live.md](go-live.md)
       secao F.
-- [ ] **Asaas PRODUCAO** (ACAO DO DONO): conta real em asaas.com, API key
-      real, mesmo webhook (URL e authToken iguais, e-mail real para alertas de
-      falha) e remover `ASAAS_BASE_URL` do `.dev.vars`.
-- [ ] Primeira assinatura real de cliente pagante.
+- [x] **Asaas PRODUCAO configurado em 2026-09-03**: key real no `.dev.vars`,
+      `ASAAS_BASE_URL` removida, webhook criado (id `d25614cc...`). Detalhe em
+      [go-live.md](go-live.md) secao F.
+- [ ] Primeira assinatura real de cliente pagante (unico passo que falta para
+      o dinheiro entrar; cobra de verdade).
 
 ## Negocio / juridico (acao do dono)
 
