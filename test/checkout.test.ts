@@ -27,12 +27,18 @@ vi.mock('../src/lib/supabase', () => ({
     return [row];
   }),
   supabaseUpdate: vi.fn(async () => []),
+  supabaseDelete: vi.fn(async () => undefined),
   supabaseRpc: vi.fn(async () => undefined),
 }));
 
 vi.mock('../src/lib/asaas', () => ({
   createCustomer: vi.fn(async () => 'cus_123'),
   createSubscription: vi.fn(async () => 'sub_123'),
+  createCardSubscription: vi.fn(async () => ({
+    subscriptionId: 'sub_card_123',
+    lastDigits: '4242',
+    brand: 'VISA',
+  })),
   cancelSubscription: vi.fn(async () => true),
   firstPaymentId: vi.fn(async () => 'pay_123'),
   pixQrCode: vi.fn(async () => ({
@@ -46,9 +52,10 @@ import app from '../src/index';
 import {
   createCustomer,
   createSubscription,
+  createCardSubscription,
   cancelSubscription,
 } from '../src/lib/asaas';
-import { supabaseInsert } from '../src/lib/supabase';
+import { supabaseInsert, supabaseDelete } from '../src/lib/supabase';
 
 function baseEnv(overrides: Partial<Env> = {}): Env {
   return {
@@ -68,6 +75,26 @@ const BODY_OK = { name: 'Maria Souza', email: 'maria@example.com', cpf_cnpj: CPF
 // Cada teste usa um documento/e-mail diferentes quando precisa escapar do lock.
 function corpo(extra: Partial<typeof BODY_OK> = {}) {
   return { ...BODY_OK, ...extra };
+}
+
+// Numero de cartao ficticio usado so nas assercoes de nao-vazamento.
+const CARTAO_NUM = '5162306219378829';
+const CCV = '318';
+
+function corpoCartao(extra: Record<string, unknown> = {}) {
+  return {
+    ...BODY_OK,
+    payment_method: 'card',
+    card: {
+      holder_name: 'MARIA SOUZA',
+      number: CARTAO_NUM,
+      expiry_month: '12',
+      expiry_year: '2030',
+      ccv: CCV,
+    },
+    holder: { postal_code: '80035-210', address_number: '103', phone: '41999998888' },
+    ...extra,
+  };
 }
 
 function post(
@@ -100,12 +127,15 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  // Nenhum sinal interno pode carregar a chave do Asaas nem dado pessoal.
+  // Nenhum sinal interno pode carregar a chave do Asaas, dado pessoal nem,
+  // acima de tudo, dado de cartao (regra do caminho PCI).
   for (const call of errorSpy.mock.calls) {
     const line = String(call[0]);
     expect(line).not.toContain(ASAAS_KEY);
     expect(line).not.toContain('maria@example.com');
     expect(line).not.toContain('52998224725');
+    expect(line).not.toContain(CARTAO_NUM);
+    expect(line).not.toContain(CCV);
   }
   errorSpy.mockRestore();
 });
@@ -196,6 +226,7 @@ describe('POST /checkout, caminho feliz e ordem', () => {
       ok: true,
       data: {
         value: 57,
+        method: 'pix',
         pix: {
           image: 'BASE64IMG',
           code: '00020126PIXCOPIAECOLA',
@@ -227,6 +258,146 @@ describe('POST /checkout, caminho feliz e ordem', () => {
       cpfCnpj: '52998224725',
       notificationsEnabled: false,
     });
+  });
+});
+
+describe('POST /checkout, cartao (cobranca automatica)', () => {
+  it('cria assinatura no cartao e devolve so bandeira e 4 digitos', async () => {
+    const res = await post(corpoCartao(), baseEnv());
+    expect(res.status).toBe(200);
+    const text = await res.text();
+
+    expect(JSON.parse(text)).toEqual({
+      ok: true,
+      data: { value: 57, method: 'card', card: { last_digits: '4242', brand: 'VISA' } },
+    });
+    // O numero e o CCV NUNCA voltam na resposta.
+    expect(text).not.toContain(CARTAO_NUM);
+    expect(text).not.toContain(CCV);
+
+    // Foi pelo caminho do cartao, nao pelo Pix.
+    expect(createCardSubscription).toHaveBeenCalledTimes(1);
+    expect(createSubscription).not.toHaveBeenCalled();
+
+    // O titular leva os dados exigidos pelo antifraude.
+    const args = vi.mocked(createCardSubscription).mock.calls[0]![1];
+    expect(args).toMatchObject({
+      card: { number: CARTAO_NUM, expiryMonth: '12' },
+      holder: { cpfCnpj: '52998224725', postalCode: '80035210', phone: '41999998888' },
+    });
+  });
+
+  it('o vinculo gravado no banco nunca carrega dado de cartao', async () => {
+    await post(corpoCartao(), baseEnv());
+    const gravado = JSON.stringify(inserted);
+    expect(gravado).not.toContain(CARTAO_NUM);
+    expect(gravado).not.toContain(CCV);
+    expect(gravado).not.toContain('MARIA SOUZA');
+  });
+
+  it.each([
+    [{ number: '123' }, 'invalid_card_number'],
+    [{ expiry_month: '13' }, 'invalid_card_expiry'],
+    [{ expiry_year: '30' }, 'invalid_card_expiry'],
+    [{ ccv: '1' }, 'invalid_card_ccv'],
+    [{ holder_name: '' }, 'invalid_card_holder'],
+  ] as const)('cartao invalido (%#) recusado sem tocar o Asaas', async (patch, erro) => {
+    const base = corpoCartao();
+    const res = await post(
+      { ...base, card: { ...base.card, ...patch } },
+      baseEnv(),
+    );
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: erro });
+    expect(createCardSubscription).not.toHaveBeenCalled();
+    expect(createCustomer).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [{ postal_code: '123' }, 'invalid_postal_code'],
+    [{ address_number: '' }, 'invalid_address_number'],
+    [{ phone: '123' }, 'invalid_phone'],
+  ] as const)('titular incompleto (%#) recusado', async (patch, erro) => {
+    const base = corpoCartao();
+    const res = await post(
+      { ...base, holder: { ...base.holder, ...patch } },
+      baseEnv(),
+    );
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: erro });
+    expect(createCardSubscription).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    // Luhn errado (digito verificador do cartao).
+    [{ number: '4111111111111112' }, 'invalid_card_number'],
+    // Validade no passado.
+    [{ expiry_year: '2020' }, 'invalid_card_expiry'],
+    // Ano absurdo.
+    [{ expiry_year: '9999' }, 'invalid_card_expiry'],
+  ] as const)('cartao com validade/Luhn ruim (%#) e barrado localmente', async (patch, erro) => {
+    const base = corpoCartao();
+    const res = await post({ ...base, card: { ...base.card, ...patch } }, baseEnv());
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: erro });
+    expect(createCardSubscription).not.toHaveBeenCalled();
+  });
+
+  it('mes/ano como numero (nao string) sao aceitos', async () => {
+    const base = corpoCartao();
+    const res = await post(
+      { ...base, card: { ...base.card, expiry_month: 12, expiry_year: 2030 } },
+      baseEnv(),
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it('sem CF-Connecting-IP o remoteIp NAO vai como literal invalido', async () => {
+    await post(corpoCartao(), baseEnv());
+    const args = vi.mocked(createCardSubscription).mock.calls[0]![1];
+    // Em teste nao ha header de IP: o campo deve ser null, nunca 'unknown'.
+    expect(args.remoteIp).toBeNull();
+  });
+
+  it('recusa libera o lock: o cliente consegue tentar outro cartao na hora', async () => {
+    const env = baseEnv();
+    vi.mocked(createCardSubscription).mockRejectedValueOnce(
+      new Error('asaas_card_failed:400'),
+    );
+    const recusado = await post(corpoCartao(), env);
+    expect(recusado.status).toBe(402);
+
+    // Mesmo e-mail e documento, outro cartao: nao pode cair em 409.
+    const segunda = await post(corpoCartao(), env);
+    expect(segunda.status).toBe(200);
+  });
+
+  it('tres recusas no mesmo IP travam o card testing', async () => {
+    const env = baseEnv();
+    for (let i = 0; i < 3; i++) {
+      vi.mocked(createCardSubscription).mockRejectedValueOnce(
+        new Error('asaas_card_failed:400'),
+      );
+      const res = await post(
+        corpoCartao({ email: `t${i}@example.com`, cpf_cnpj: CNPJ_OK }),
+        env,
+        { ip: '7.7.7.7' },
+      );
+      expect(res.status).toBe(402);
+    }
+    const bloqueado = await post(
+      corpoCartao({ email: 'quarto@example.com' }),
+      env,
+      { ip: '7.7.7.7' },
+    );
+    expect(bloqueado.status).toBe(429);
+  });
+
+  it('sem payment_method o padrao continua sendo Pix', async () => {
+    const res = await post(BODY_OK, baseEnv());
+    const json = (await res.json()) as { data: { method: string } };
+    expect(json.data.method).toBe('pix');
+    expect(createCardSubscription).not.toHaveBeenCalled();
   });
 });
 
@@ -289,6 +460,19 @@ describe('POST /checkout, falhas e abusos', () => {
     expect(bloqueado.status).toBe(429);
   });
 
+  it('cartao recusado vira 402 e o tenant orfao e removido', async () => {
+    vi.mocked(createCardSubscription).mockRejectedValueOnce(
+      new Error('asaas_card_failed:400'),
+    );
+    const res = await post(corpoCartao(), baseEnv());
+    expect(res.status).toBe(402);
+    expect(await res.json()).toEqual({ error: 'card_declined' });
+    // Digitar o cartao errado nao pode deixar lixo no banco.
+    expect(supabaseDelete).toHaveBeenCalledWith(expect.anything(), 'tenants', {
+      id: `eq.${TENANT_ID}`,
+    });
+  });
+
   it('throttle por IP: acima do teto responde 429', async () => {
     const env = baseEnv();
     for (let i = 0; i < 10; i++) {
@@ -300,5 +484,23 @@ describe('POST /checkout, falhas e abusos', () => {
       ip: '9.9.9.9',
     });
     expect(res.status).toBe(429);
+  });
+
+  it('IP abusivo NAO consome o teto global (nao derruba as vendas do dia)', async () => {
+    const env = baseEnv();
+    // 30 tentativas de um IP so: as 20 ultimas ja sao barradas por IP e nao
+    // podem contar no contador global.
+    for (let i = 0; i < 30; i++) {
+      await post(corpo({ email: `abuso${i}@example.com`, cpf_cnpj: CNPJ_OK }), env, {
+        ip: '6.6.6.6',
+      });
+    }
+    // Cliente legitimo, outro IP e outro documento: tem que passar.
+    const vitima = await post(
+      corpo({ email: 'cliente.real@example.com', cpf_cnpj: CPF_OK }),
+      env,
+      { ip: '5.5.5.5' },
+    );
+    expect(vitima.status).toBe(200);
   });
 });

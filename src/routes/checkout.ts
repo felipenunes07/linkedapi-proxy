@@ -1,12 +1,13 @@
 import { Hono } from 'hono';
 import type { Env, Variables } from '../types';
-import { supabaseSelect, supabaseInsert } from '../lib/supabase';
+import { supabaseSelect, supabaseInsert, supabaseDelete } from '../lib/supabase';
 import { attemptKey, bumpAttempts } from '../lib/throttle';
 import { hashApiKey } from '../lib/hash';
 import { apenasDigitos, documentoValido } from '../lib/documento';
 import {
   createCustomer,
   createSubscription,
+  createCardSubscription,
   cancelSubscription,
   firstPaymentId,
   pixQrCode,
@@ -36,6 +37,9 @@ import {
 const MAX_ATTEMPTS_PER_IP = 10;
 const MAX_ATTEMPTS_GLOBAL = 60;
 const MAX_ATTEMPTS_PER_DOC = 3;
+// Card testing e rajada de RECUSAS. Cliente legitimo erra o cartao uma ou duas
+// vezes; na terceira, o IP para de tentar hoje.
+const MAX_DECLINES_PER_IP = 3;
 const LOCK_TTL_SECONDS = 15 * 60;
 const DEFAULT_PRICE_BRL = 57;
 const DEFAULT_SEAT_CAP = 10;
@@ -55,6 +59,83 @@ function validEmail(value: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(value);
 }
 
+interface CartaoValidado {
+  card: {
+    holderName: string;
+    number: string;
+    expiryMonth: string;
+    expiryYear: string;
+    ccv: string;
+  };
+  holder: { postalCode: string; addressNumber: string; phone: string };
+}
+
+// Luhn: barra digitacao errada e lixo de card testing antes de queimar uma
+// transacao real na adquirente.
+function luhnValido(numero: string): boolean {
+  let soma = 0;
+  let dobra = false;
+  for (let i = numero.length - 1; i >= 0; i--) {
+    let d = Number(numero[i]);
+    if (dobra) {
+      d *= 2;
+      if (d > 9) d -= 9;
+    }
+    soma += d;
+    dobra = !dobra;
+  }
+  return soma % 10 === 0;
+}
+
+// Valida a forma dos dados de cartao ANTES de qualquer chamada. Devolve o
+// codigo de erro (string) quando invalido. NUNCA loga o conteudo.
+function validarCartao(card: unknown, holder: unknown): CartaoValidado | string {
+  const c = (card ?? {}) as Record<string, unknown>;
+  const h = (holder ?? {}) as Record<string, unknown>;
+  const texto = (v: unknown, max: number): string | null =>
+    typeof v === 'string' && v.trim().length > 0 && v.length <= max
+      ? v.trim()
+      : null;
+  // Teto de tamanho ANTES do replace: nao rodar regex em string arbitraria.
+  const digitosDe = (v: unknown, maxBruto: number): string =>
+    typeof v === 'string' && v.length <= maxBruto ? v.replace(/\D/g, '') : '';
+  // Mes/ano aceitam numero tambem (armadilha comum de integracao).
+  const comoTexto = (v: unknown): string =>
+    typeof v === 'string' ? v : typeof v === 'number' ? String(v) : '';
+
+  const holderName = texto(c.holder_name, 100);
+  const numero = digitosDe(c.number, 32);
+  const mes = comoTexto(c.expiry_month).trim().padStart(2, '0');
+  const ano = comoTexto(c.expiry_year).trim();
+  const ccv = digitosDe(c.ccv, 8);
+
+  if (!holderName) return 'invalid_card_holder';
+  if (numero.length < 13 || numero.length > 19) return 'invalid_card_number';
+  if (!luhnValido(numero)) return 'invalid_card_number';
+  if (!/^(0[1-9]|1[0-2])$/.test(mes)) return 'invalid_card_expiry';
+  if (!/^\d{4}$/.test(ano)) return 'invalid_card_expiry';
+  // Validade tem que estar no futuro e dentro de um horizonte plausivel.
+  const agora = new Date();
+  const anoAtual = agora.getUTCFullYear();
+  const mesAtual = agora.getUTCMonth() + 1;
+  const anoNum = Number(ano);
+  if (anoNum < anoAtual || anoNum > anoAtual + 20) return 'invalid_card_expiry';
+  if (anoNum === anoAtual && Number(mes) < mesAtual) return 'invalid_card_expiry';
+  if (ccv.length < 3 || ccv.length > 4) return 'invalid_card_ccv';
+
+  const cep = digitosDe(h.postal_code, 20);
+  const numeroEndereco = texto(h.address_number, 10);
+  const telefone = digitosDe(h.phone, 25);
+  if (cep.length !== 8) return 'invalid_postal_code';
+  if (!numeroEndereco) return 'invalid_address_number';
+  if (telefone.length < 10 || telefone.length > 11) return 'invalid_phone';
+
+  return {
+    card: { holderName, number: numero, expiryMonth: mes, expiryYear: ano, ccv },
+    holder: { postalCode: cep, addressNumber: numeroEndereco, phone: telefone },
+  };
+}
+
 export const checkout = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 checkout.post('/', async (c) => {
@@ -72,10 +153,25 @@ checkout.post('/', async (c) => {
     return c.json({ error: 'invalid_content_type' }, 415);
   }
 
-  const ip = c.req.header('CF-Connecting-IP') ?? 'unknown';
+  // O IP e checado e retorna ANTES de tocar o contador global. Ao contrario,
+  // um unico IP abusivo consumiria o teto global e derrubaria as vendas do dia
+  // inteiro (auto-DoS).
+  const ipHeader = c.req.header('CF-Connecting-IP');
+  const ip = ipHeader ?? 'unknown';
   const porIp = await bumpAttempts(kv, attemptKey('checkout-ip', ip));
+  if (porIp > MAX_ATTEMPTS_PER_IP) {
+    return c.json({ error: 'rate_limited' }, 429);
+  }
+  // Recusas anteriores deste IP: card testing se manifesta como rajada de
+  // recusas, e o teto por documento nao pega (CPF valido se gera aos milhares).
+  const recusas = Number(
+    (await kv.get(attemptKey('checkout-declines', ip))) ?? '0',
+  );
+  if (recusas >= MAX_DECLINES_PER_IP) {
+    return c.json({ error: 'rate_limited' }, 429);
+  }
   const global = await bumpAttempts(kv, attemptKey('checkout-global', 'all'));
-  if (porIp > MAX_ATTEMPTS_PER_IP || global > MAX_ATTEMPTS_GLOBAL) {
+  if (global > MAX_ATTEMPTS_GLOBAL) {
     return c.json({ error: 'rate_limited' }, 429);
   }
 
@@ -86,7 +182,10 @@ checkout.post('/', async (c) => {
     return c.json({ error: 'invalid_json' }, 400);
   }
 
-  const { name, email, cpf_cnpj } = (body ?? {}) as Record<string, unknown>;
+  const { name, email, cpf_cnpj, payment_method, card, holder } = (body ??
+    {}) as Record<string, unknown>;
+
+  const metodo = payment_method === 'card' ? 'card' : 'pix';
 
   if (typeof name !== 'string' || name.trim().length < 2 || name.length > MAX_NAME) {
     return c.json({ error: 'invalid_name' }, 400);
@@ -102,6 +201,17 @@ checkout.post('/', async (c) => {
     return c.json({ error: 'invalid_document' }, 400);
   }
 
+  // Campos extras do cartao. O Asaas exige titular completo (antifraude).
+  // IMPORTANT: nada daqui e logado ou gravado; segue direto para o Asaas.
+  let dadosCartao: CartaoValidado | null = null;
+  if (metodo === 'card') {
+    const validado = validarCartao(card, holder);
+    if (typeof validado === 'string') {
+      return c.json({ error: validado }, 400);
+    }
+    dadosCartao = validado;
+  }
+
   // Chaves de KV nunca carregam dado pessoal em claro: sempre o hash.
   const docHash = await hashApiKey(documento);
   const porDoc = await bumpAttempts(kv, attemptKey('checkout-doc', docHash));
@@ -110,14 +220,18 @@ checkout.post('/', async (c) => {
   }
 
   // Camada 5: lock de idempotencia (duplo clique / reenvio do formulario).
+  // Toda saida de FALHA libera o lock: senao um cartao recusado prenderia o
+  // cliente por 15 minutos, justamente quando ele quer tentar outro cartao.
   const lockKey = `checkout:lock:${await hashApiKey(`${email.toLowerCase()}|${documento}`)}`;
   if (await kv.get(lockKey)) {
     return c.json({ error: 'checkout_in_progress' }, 409);
   }
   await kv.put(lockKey, '1', { expirationTtl: LOCK_TTL_SECONDS });
+  const liberarLock = () => kv.delete(lockKey).catch(() => {});
 
   const price = Number(c.env.PLAN_PRICE_BRL ?? DEFAULT_PRICE_BRL);
   if (!Number.isFinite(price) || price <= 0) {
+    await liberarLock();
     return c.json({ error: 'internal_error' }, 500);
   }
 
@@ -132,10 +246,12 @@ checkout.post('/', async (c) => {
     });
     if (Number.isFinite(seatCap) && ativas.length >= seatCap) {
       console.error('checkout_sold_out');
+      await liberarLock();
       return c.json({ error: 'sold_out' }, 503);
     }
   } catch {
     console.error('checkout_capacity_check_failed');
+    await liberarLock();
     return c.json({ error: 'internal_error' }, 500);
   }
 
@@ -155,9 +271,11 @@ checkout.post('/', async (c) => {
   } catch (err) {
     const message = err instanceof Error ? err.name : 'erro';
     if (err instanceof Error && err.message.startsWith('asaas_customer_failed:400')) {
+      await liberarLock();
       return c.json({ error: 'invalid_document' }, 400);
     }
     console.error(`checkout_customer_failed: ${message}`);
+    await liberarLock();
     return c.json({ error: 'billing_unavailable' }, 502);
   }
 
@@ -175,22 +293,67 @@ checkout.post('/', async (c) => {
     tenantId = created.id;
   } catch {
     console.error('checkout_tenant_failed');
+    await liberarLock();
     return c.json({ error: 'internal_error' }, 500);
   }
 
   // Passo 3: assinatura. A partir daqui existe cobranca real.
+  // Cartao: o Asaas valida e JA CAPTURA o primeiro ciclo, depois debita sozinho.
+  // Pix: o Asaas emite uma cobranca por ciclo e o cliente paga cada uma.
   let subscriptionId: string;
+  let cartaoResumo: { last_digits: string; brand: string } | null = null;
   try {
-    subscriptionId = await createSubscription(c.env, {
-      customerId,
-      value: price,
-      description: 'LinkedAPI, 1 conta de LinkedIn conectada',
-      externalReference: tenantId,
-    });
+    if (dadosCartao) {
+      const resultado = await createCardSubscription(c.env, {
+        customerId,
+        value: price,
+        description: 'LinkedAPI, 1 conta de LinkedIn conectada',
+        externalReference: tenantId,
+        // Só o IP REAL do pagador vai ao antifraude. Sem header, o campo é
+        // omitido: mandar 'unknown' desligaria o antifraude em silêncio.
+        remoteIp: ipHeader ?? null,
+        card: dadosCartao.card,
+        holder: {
+          name: name.trim(),
+          email,
+          cpfCnpj: documento,
+          ...dadosCartao.holder,
+        },
+      });
+      subscriptionId = resultado.subscriptionId;
+      cartaoResumo = { last_digits: resultado.lastDigits, brand: resultado.brand };
+    } else {
+      subscriptionId = await createSubscription(c.env, {
+        customerId,
+        value: price,
+        description: 'LinkedAPI, 1 conta de LinkedIn conectada',
+        externalReference: tenantId,
+      });
+    }
   } catch (err) {
+    const message = err instanceof Error ? err.message : '';
+    // Cartao recusado pela adquirente e erro DO CLIENTE, nao nosso: 402 para
+    // ele poder tentar outro cartao. Sem detalhe do upstream.
+    if (message.startsWith('asaas_card_failed:400')) {
+      // Recusa conta para o teto de card testing daquele IP.
+      await bumpAttempts(kv, attemptKey('checkout-declines', ip));
+      // O tenant acabou de nascer e nao chegou a valer (sem chave, sem conta,
+      // sem cobranca). Recusa de cartao e comum: sem isso o banco acumularia
+      // um tenant morto por digitacao errada.
+      await supabaseDelete(c.env, 'tenants', { id: `eq.${tenantId}` }).catch(() => {
+        console.error('checkout_orphan_tenant');
+      });
+      // Libera o lock: o cliente precisa poder tentar outro cartao agora.
+      await liberarLock();
+      return c.json({ error: 'card_declined' }, 402);
+    }
+    // Falha nao-determinada no cartao (ex.: timeout): o dinheiro PODE ter saido.
+    // O tenantId e o externalReference enviado ao Asaas, entao e o unico fio
+    // para reconciliar a mao. Nao e segredo.
     console.error(
-      `checkout_subscription_failed: ${err instanceof Error ? err.name : 'erro'}`,
+      `checkout_subscription_failed: ${err instanceof Error ? err.name : 'erro'} tenant=${tenantId} metodo=${metodo}`,
     );
+    await liberarLock();
     return c.json({ error: 'billing_unavailable' }, 502);
   }
 
@@ -213,11 +376,20 @@ checkout.post('/', async (c) => {
     console.error(
       `checkout_orphan_subscription: ${subscriptionId} cancelada=${cancelada}`,
     );
+    await liberarLock();
     return c.json({ error: 'billing_unavailable' }, 502);
   }
 
-  // Passo 5: QR do Pix. Se nao vier, a assinatura existe e o cliente recebe a
-  // cobranca de outras formas: respondemos ok sem QR em vez de falhar.
+  // Cartao: ja foi capturado na criacao da assinatura, nao ha QR a mostrar.
+  if (cartaoResumo) {
+    return c.json({
+      ok: true,
+      data: { value: price, method: 'card', card: cartaoResumo },
+    });
+  }
+
+  // Passo 5 (Pix): QR da primeira cobranca. Se nao vier, a assinatura existe e o
+  // cliente recebe a cobranca de outras formas: respondemos ok sem QR.
   let pix: { image: string; code: string; expires_at: string | null } | null = null;
   try {
     const paymentId = await firstPaymentId(c.env, subscriptionId);
@@ -235,5 +407,5 @@ checkout.post('/', async (c) => {
     console.error('checkout_pix_unavailable');
   }
 
-  return c.json({ ok: true, data: { value: price, pix } });
+  return c.json({ ok: true, data: { value: price, method: 'pix', pix } });
 });

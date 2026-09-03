@@ -86,6 +86,34 @@ export async function supabaseRpc(
   }
 }
 
+// DELETE com filtros PostgREST. Uso restrito a limpeza de registro que acabou
+// de ser criado e nao chegou a valer (ex.: tenant de um checkout cujo cartao
+// foi recusado). Regra do PRD: nada que ja teve vida util e deletado; para
+// esses casos o caminho e mudar o status.
+export async function supabaseDelete(
+  env: Env,
+  table: string,
+  filters: Record<string, string>,
+): Promise<void> {
+  const url = new URL(`${env.SUPABASE_URL}/rest/v1/${table}`);
+  for (const [key, value] of Object.entries(filters)) {
+    url.searchParams.set(key, value);
+  }
+
+  const res = await fetch(url.toString(), {
+    method: 'DELETE',
+    headers: {
+      apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+      authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      accept: 'application/json',
+    },
+  });
+
+  if (!res.ok) {
+    throw new Error(`supabase_delete_failed:${res.status}`);
+  }
+}
+
 // UPDATE (PATCH) tipado, com filtros PostgREST. Retorna as linhas alteradas.
 export async function supabaseUpdate<T>(
   env: Env,

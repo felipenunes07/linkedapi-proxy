@@ -379,11 +379,16 @@ eventHooks.post('/billing', async (c) => {
       { status: 'active' },
     );
 
-    // F2.16: cliente que pagou passa a receber os avisos do Asaas. A assinatura
-    // Pix nao debita sozinha (o Asaas emite cobranca nova a cada ciclo e o
-    // cliente paga na mao), entao sem o aviso mensal ele simplesmente nao paga
-    // o mes 2 e a conta pausa. Best-effort: nunca bloqueia o webhook.
-    if (sub.asaas_customer_id) {
+    // F2.16: cliente que pagou por PIX passa a receber os avisos do Asaas. A
+    // assinatura Pix nao debita sozinha (o Asaas emite cobranca nova a cada
+    // ciclo e o cliente paga na mao), entao sem o aviso mensal ele nao paga o
+    // mes 2 e a conta pausa.
+    //
+    // SO para Pix: cartao debita sozinho e nao precisa de aviso, e religar a
+    // notificacao ali reabriria o B2 (cobranca por e-mail contra o endereco que
+    // o pagador digitou) de forma automatica. Metodo desconhecido = nao religa.
+    const metodoPagamento = pickString(payment, 'billingType');
+    if (sub.asaas_customer_id && metodoPagamento === 'PIX') {
       fireAndForget(c, async () => {
         const ok = await enableCustomerNotifications(c.env, sub.asaas_customer_id!);
         if (!ok) console.error('billing_enable_notifications_failed');

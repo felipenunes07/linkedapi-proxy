@@ -67,17 +67,37 @@ async function readJson<T>(res: Response, code: string): Promise<T> {
   }
 }
 
-// Descricao do erro de validacao do Asaas (ex.: "CPF invalido"). E mensagem de
-// campo, nao segredo: util no log do operador para diagnosticar recusa.
+// Remove sequencias longas de digitos de qualquer texto vindo do upstream.
+// Defesa em profundidade: nunca dependemos da promessa de que o Asaas nao ecoa
+// um PAN dentro de uma mensagem de validacao.
+function semDigitosLongos(texto: string): string {
+  return texto.replace(/\d{12,}/g, '[redigido]');
+}
+
+// Erro de validacao do Asaas. `code` e um identificador de maquina (seguro);
+// `description` e texto livre do upstream, entao so sai higienizado e NUNCA no
+// caminho de cartao (ver validationCode).
 async function validationDetail(res: Response): Promise<string> {
   try {
     const data = (await res.json()) as {
       errors?: { code?: string; description?: string }[];
     };
     const first = data.errors?.[0];
-    return first ? `${first.code ?? '?'}: ${first.description ?? '?'}` : 'sem detalhe';
+    if (!first) return 'sem detalhe';
+    return semDigitosLongos(`${first.code ?? '?'}: ${first.description ?? '?'}`);
   } catch {
     return 'corpo ilegivel';
+  }
+}
+
+// So o codigo de maquina. Usado no caminho PCI: em transacao de cartao nao se
+// loga texto livre de terceiro, ponto.
+async function validationCode(res: Response): Promise<string> {
+  try {
+    const data = (await res.json()) as { errors?: { code?: string }[] };
+    return data.errors?.[0]?.code ?? 'sem_codigo';
+  } catch {
+    return 'corpo_ilegivel';
   }
 }
 
@@ -166,6 +186,94 @@ export async function enableCustomerNotifications(
     body: JSON.stringify({ notificationDisabled: false }),
   });
   return res.ok;
+}
+
+// Assinatura no CARTAO: cobranca automatica de verdade (o Asaas valida o cartao
+// na criacao e debita sozinho a cada ciclo).
+//
+// REGRA INVIOLAVEL DESTE CAMINHO: os dados do cartao atravessam o Worker e vao
+// direto para o Asaas. NUNCA sao gravados, NUNCA sao logados, NUNCA voltam na
+// resposta ao cliente e NUNCA entram em mensagem de erro. O objeto morre no
+// fim desta funcao.
+export interface CardInput {
+  holderName: string;
+  number: string;
+  expiryMonth: string;
+  expiryYear: string;
+  ccv: string;
+}
+
+export interface CardHolderInput {
+  name: string;
+  email: string;
+  cpfCnpj: string;
+  postalCode: string;
+  addressNumber: string;
+  phone: string;
+}
+
+export interface CardSubscriptionResult {
+  subscriptionId: string;
+  // So o que e seguro mostrar de volta ao cliente (confirmacao visual).
+  lastDigits: string;
+  brand: string;
+}
+
+export async function createCardSubscription(
+  env: Env,
+  input: {
+    customerId: string;
+    value: number;
+    description: string;
+    externalReference: string;
+    // IP do PAGADOR (antifraude do Asaas), nunca o do servidor. null quando
+    // desconhecido: mandar um literal invalido desligaria o antifraude em
+    // silencio, entao o campo simplesmente nao vai.
+    remoteIp: string | null;
+    card: CardInput;
+    holder: CardHolderInput;
+  },
+): Promise<CardSubscriptionResult> {
+  const today = new Date().toISOString().slice(0, 10);
+  const res = await asaasFetch(env, '/subscriptions', {
+    method: 'POST',
+    body: JSON.stringify({
+      customer: input.customerId,
+      billingType: 'CREDIT_CARD',
+      value: input.value,
+      nextDueDate: today,
+      cycle: 'MONTHLY',
+      description: input.description,
+      externalReference: input.externalReference,
+      ...(input.remoteIp ? { remoteIp: input.remoteIp } : {}),
+      creditCard: input.card,
+      creditCardHolderInfo: input.holder,
+    }),
+  });
+  if (!res.ok) {
+    // Caminho PCI: SO o codigo de maquina. Texto livre do upstream nunca entra
+    // no log aqui, nem "limpo": nao se aposta em promessa de terceiro sobre o
+    // que ele ecoa numa mensagem de erro.
+    console.error(`asaas_card_rejected: ${await validationCode(res)}`);
+    throw new Error(`asaas_card_failed:${res.status}`);
+  }
+  const data = await readJson<{
+    id?: string;
+    creditCard?: { creditCardNumber?: string; creditCardBrand?: string };
+  }>(res, 'asaas_card_failed');
+  if (!data.id) {
+    throw new Error('asaas_card_failed:no_id');
+  }
+  // Nao confiar no upstream para o tamanho: truncar e validar antes de deixar
+  // sair na resposta.
+  const digitos = (data.creditCard?.creditCardNumber ?? '').replace(/\D/g, '');
+  const ultimos = digitos.slice(-4);
+  const marca = (data.creditCard?.creditCardBrand ?? '').slice(0, 20);
+  return {
+    subscriptionId: data.id,
+    lastDigits: /^\d{4}$/.test(ultimos) ? ultimos : '',
+    brand: /^[A-Za-z_ ]*$/.test(marca) ? marca : '',
+  };
 }
 
 // Desfaz a assinatura quando o vinculo no nosso banco falha: sem isso o cliente
