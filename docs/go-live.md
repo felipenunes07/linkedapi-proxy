@@ -85,12 +85,29 @@ npm run prova:chave -- <tenant_id>
       Smoke do `/hooks/message-received` em producao: sem secret 401, payload
       vazio 400, conta desconhecida `{ok, ignored}`.
 
-- [ ] [VOCE] Conta Asaas: gerar `ASAAS_API_KEY` e configurar o webhook de
-      cobranca no painel apontando para `{PUBLIC_BASE_URL}/hooks/billing` com
-      o token `ASAAS_HOOK_TOKEN` no header `asaas-access-token` (validar no
-      sandbox primeiro: `ASAAS_BASE_URL=https://api-sandbox.asaas.com/v3`).
-- [ ] Primeira assinatura: `npm run billing:subscribe -- <tenant_id> "<nome>"
-      <cpf_cnpj> <email>`; comprovar pagar -> ativa e atrasar -> pausa.
+- [x] **Asaas SANDBOX validado ponta a ponta (2026-09-03).** Conta sandbox
+      criada, `ASAAS_API_KEY` (`$aact_hmlg...`) e
+      `ASAAS_BASE_URL=https://api-sandbox.asaas.com/v3` no `.dev.vars`; a key
+      foi conferida contra os dois ambientes (sandbox 200, producao 401) antes
+      de qualquer escrita. Webhook criado via API (id
+      `b85078b7-234a-4f6b-ae17-79b265973c57`), apontando para
+      `/hooks/billing`, com `authToken` = `ASAAS_HOOK_TOKEN` e os 3 eventos
+      (PAYMENT_CONFIRMED, PAYMENT_RECEIVED, PAYMENT_OVERDUE).
+      Provas, no tenant descartavel `aad5c8ef` (nenhuma conta real tocada):
+      - `billing:subscribe` criou cliente + assinatura Pix R$57/mes
+        (`sub_uxt0yonkyuqn8kjq`), linha em `billing_subscriptions` = `pending`;
+      - recebimento confirmado no Asaas -> a ORIGEM chamou nosso webhook e a
+        assinatura virou `active` (chain Asaas -> Worker -> Supabase provada);
+      - `PAYMENT_OVERDUE` -> assinatura `overdue` E conta do tenant `paused`;
+      - `PAYMENT_CONFIRMED` -> assinatura `active` E conta de volta `active`;
+      - assinatura desconhecida -> `{ok, ignored}`, sem efeito;
+      - gate fail-closed em producao: sem token 401, payload vazio 400.
+- [ ] [VOCE] PRODUCAO: criar a conta real em asaas.com, gerar a API key real,
+      criar o mesmo webhook (URL e `authToken` iguais; use um e-mail seu de
+      verdade para os alertas de falha) e REMOVER `ASAAS_BASE_URL` do
+      `.dev.vars` (o default ja e producao).
+- [ ] Primeira assinatura real: `npm run billing:subscribe -- <tenant_id>
+      "<nome>" <cpf_cnpj> <email>`.
 - [ ] Conferir a operacao: `curl -H "X-ADMIN-KEY: ..." <url>/admin/capacity`.
 
 ## G. Acabamento

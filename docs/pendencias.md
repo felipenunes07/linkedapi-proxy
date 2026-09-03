@@ -37,12 +37,14 @@ Atualizado em 2026-08-20.
 - [x] Secrets gerados e em producao (2026-09-01), incluindo `PUBLIC_BASE_URL`.
 - [x] Webhooks registrados na origem (2026-09-01/02): `account-status` e
       `messaging`, smoke fail-closed OK.
-- [ ] **Conta Asaas** (criar/usar a da empresa; ACAO DO DONO): gerar
-      `ASAAS_API_KEY`, configurar o webhook de cobranca no painel apontando
-      para `{PUBLIC_BASE_URL}/hooks/billing` com o token no header
-      `asaas-access-token`, e validar no sandbox antes de producao.
-- [ ] Primeira assinatura real: `npm run billing:subscribe -- ...` e o ciclo
-      pagar -> ativa / atrasar -> pausa comprovado ponta a ponta.
+- [x] **Asaas SANDBOX: validado ponta a ponta em 2026-09-03** (assinatura
+      criada, webhook da origem chegando, pagar -> ativa / atrasar -> pausa /
+      pagar -> despausa, tudo comprovado). Detalhe em [go-live.md](go-live.md)
+      secao F.
+- [ ] **Asaas PRODUCAO** (ACAO DO DONO): conta real em asaas.com, API key
+      real, mesmo webhook (URL e authToken iguais, e-mail real para alertas de
+      falha) e remover `ASAAS_BASE_URL` do `.dev.vars`.
+- [ ] Primeira assinatura real de cliente pagante.
 
 ## Negocio / juridico (acao do dono)
 

@@ -122,7 +122,13 @@ npm run billing:status
 
 ---
 
-## Anexo: Asaas sandbox (fazer UMA vez, antes do primeiro cliente)
+## Anexo: Asaas sandbox - CONCLUIDO em 2026-09-03
+
+O ciclo inteiro foi validado no sandbox (ver go-live.md secao F). Falta so
+repetir os passos 1-4 na conta de PRODUCAO (asaas.com) e remover
+`ASAAS_BASE_URL` do `.dev.vars`. O roteiro abaixo fica como referencia.
+
+
 
 1. Criar a conta sandbox: https://sandbox.asaas.com (cadastro gratis,
    independente da conta real).
