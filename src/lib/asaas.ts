@@ -149,6 +149,25 @@ export async function createSubscription(
   return data.id;
 }
 
+// Liga as notificacoes do Asaas para um cliente que JA PAGOU (F2.16).
+//
+// O checkout cria o cliente com notificacao desligada de proposito (B2: senao
+// qualquer um dispara cobranca por e-mail contra o CPF de um terceiro). Mas a
+// assinatura Pix nao debita sozinha: o Asaas emite uma cobranca nova todo mes e
+// o cliente precisa ser AVISADO para pagar. Depois do primeiro pagamento ele e
+// um cliente verificado, entao ligar a notificacao deixa de ser risco e passa a
+// ser necessario para a recorrencia funcionar.
+export async function enableCustomerNotifications(
+  env: Env,
+  customerId: string,
+): Promise<boolean> {
+  const res = await asaasFetch(env, `/customers/${encodeURIComponent(customerId)}`, {
+    method: 'POST',
+    body: JSON.stringify({ notificationDisabled: false }),
+  });
+  return res.ok;
+}
+
 // Desfaz a assinatura quando o vinculo no nosso banco falha: sem isso o cliente
 // seria cobrado por uma assinatura que o webhook nunca conseguiria resolver.
 export async function cancelSubscription(

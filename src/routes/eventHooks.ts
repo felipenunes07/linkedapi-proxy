@@ -7,6 +7,7 @@ import { randomHex32 } from '../lib/random';
 import { asRecord, pickString } from '../lib/sanitize';
 import { createHostedAuthLink, getAccount } from '../lib/unipile';
 import { deliverWebhook } from '../lib/webhooks';
+import { enableCustomerNotifications } from '../lib/asaas';
 import { fireAndForget } from '../lib/async';
 import { attemptKey, bumpAttempts } from '../lib/throttle';
 
@@ -45,6 +46,7 @@ interface TenantWebhookRow {
 
 interface BillingRow {
   tenant_id: string;
+  asaas_customer_id?: string;
 }
 
 // Tetos de tentativa (janela diaria UTC, mesmos contadores KV do /hooks/connect).
@@ -343,7 +345,7 @@ eventHooks.post('/billing', async (c) => {
 
   const subs = await supabaseSelect<BillingRow>(c.env, 'billing_subscriptions', {
     asaas_subscription_id: `eq.${subscriptionId}`,
-    select: 'tenant_id',
+    select: 'tenant_id,asaas_customer_id',
     limit: '1',
   });
   const sub = subs[0];
@@ -376,6 +378,17 @@ eventHooks.post('/billing', async (c) => {
       { tenant_id: `eq.${sub.tenant_id}`, status: 'eq.paused' },
       { status: 'active' },
     );
+
+    // F2.16: cliente que pagou passa a receber os avisos do Asaas. A assinatura
+    // Pix nao debita sozinha (o Asaas emite cobranca nova a cada ciclo e o
+    // cliente paga na mao), entao sem o aviso mensal ele simplesmente nao paga
+    // o mes 2 e a conta pausa. Best-effort: nunca bloqueia o webhook.
+    if (sub.asaas_customer_id) {
+      fireAndForget(c, async () => {
+        const ok = await enableCustomerNotifications(c.env, sub.asaas_customer_id!);
+        if (!ok) console.error('billing_enable_notifications_failed');
+      });
+    }
   }
 
   return c.json({ ok: true });
