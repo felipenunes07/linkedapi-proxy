@@ -188,93 +188,91 @@ export async function enableCustomerNotifications(
   return res.ok;
 }
 
-// Assinatura no CARTAO: cobranca automatica de verdade (o Asaas valida o cartao
-// na criacao e debita sozinho a cada ciclo).
+// PIX AUTOMATICO (F2.18): o pagador autoriza UMA vez pelo QR e o Asaas debita
+// sozinho nos ciclos seguintes. E o unico caminho que junta as tres coisas que
+// queremos: cobranca automatica, nossa marca na tela e ZERO escopo PCI (Pix
+// nao e cartao).
 //
-// REGRA INVIOLAVEL DESTE CAMINHO: os dados do cartao atravessam o Worker e vao
-// direto para o Asaas. NUNCA sao gravados, NUNCA sao logados, NUNCA voltam na
-// resposta ao cliente e NUNCA entram em mensagem de erro. O objeto morre no
-// fim desta funcao.
-export interface CardInput {
-  holderName: string;
-  number: string;
-  expiryMonth: string;
-  expiryYear: string;
-  ccv: string;
+// O QR devolvido carrega, num codigo so, o pagamento do primeiro mes E o
+// consentimento da recorrencia.
+export interface PixAutomaticResult {
+  authorizationId: string;
+  qr: { image: string; code: string; expires_at: string | null } | null;
 }
 
-export interface CardHolderInput {
-  name: string;
-  email: string;
-  cpfCnpj: string;
-  postalCode: string;
-  addressNumber: string;
-  phone: string;
-}
-
-export interface CardSubscriptionResult {
-  subscriptionId: string;
-  // So o que e seguro mostrar de volta ao cliente (confirmacao visual).
-  lastDigits: string;
-  brand: string;
-}
-
-export async function createCardSubscription(
+export async function createPixAutomaticAuthorization(
   env: Env,
   input: {
     customerId: string;
     value: number;
     description: string;
-    externalReference: string;
-    // IP do PAGADOR (antifraude do Asaas), nunca o do servidor. null quando
-    // desconhecido: mandar um literal invalido desligaria o antifraude em
-    // silencio, entao o campo simplesmente nao vai.
-    remoteIp: string | null;
-    card: CardInput;
-    holder: CardHolderInput;
+    // Max 35 caracteres na API; o uuid do tenant sem hifens cabe (32).
+    contractId: string;
   },
-): Promise<CardSubscriptionResult> {
-  const today = new Date().toISOString().slice(0, 10);
-  const res = await asaasFetch(env, '/subscriptions', {
+): Promise<PixAutomaticResult> {
+  // A recorrencia comeca no proximo ciclo: o primeiro mes e pago pelo QR
+  // imediato, entao startDate hoje cobraria duas vezes.
+  const inicio = new Date();
+  inicio.setMonth(inicio.getMonth() + 1);
+
+  const res = await asaasFetch(env, '/pix/automatic/authorizations', {
     method: 'POST',
     body: JSON.stringify({
-      customer: input.customerId,
-      billingType: 'CREDIT_CARD',
+      customerId: input.customerId,
+      frequency: 'MONTHLY',
+      contractId: input.contractId,
+      startDate: inicio.toISOString().slice(0, 10),
       value: input.value,
-      nextDueDate: today,
-      cycle: 'MONTHLY',
-      description: input.description,
-      externalReference: input.externalReference,
-      ...(input.remoteIp ? { remoteIp: input.remoteIp } : {}),
-      creditCard: input.card,
-      creditCardHolderInfo: input.holder,
+      description: input.description.slice(0, 35),
+      paymentCreationMode: 'SUBSCRIPTION',
+      // Uma falha de debito nao cancela na hora: o Asaas tenta de novo.
+      retryPolicy: 'ALLOW_THREE_IN_SEVEN_DAYS',
+      immediateQrCode: { originalValue: input.value, expirationSeconds: 3600 },
     }),
   });
   if (!res.ok) {
-    // Caminho PCI: SO o codigo de maquina. Texto livre do upstream nunca entra
-    // no log aqui, nem "limpo": nao se aposta em promessa de terceiro sobre o
-    // que ele ecoa numa mensagem de erro.
-    console.error(`asaas_card_rejected: ${await validationCode(res)}`);
-    throw new Error(`asaas_card_failed:${res.status}`);
+    console.error(`asaas_pix_auto_rejected: ${await validationDetail(res)}`);
+    throw new Error(`asaas_pix_auto_failed:${res.status}`);
   }
   const data = await readJson<{
     id?: string;
-    creditCard?: { creditCardNumber?: string; creditCardBrand?: string };
-  }>(res, 'asaas_card_failed');
+    payload?: string;
+    encodedImage?: string;
+    immediateQrCode?: { expirationDate?: string };
+  }>(res, 'asaas_pix_auto_failed');
   if (!data.id) {
-    throw new Error('asaas_card_failed:no_id');
+    throw new Error('asaas_pix_auto_failed:no_id');
   }
-  // Nao confiar no upstream para o tamanho: truncar e validar antes de deixar
-  // sair na resposta.
-  const digitos = (data.creditCard?.creditCardNumber ?? '').replace(/\D/g, '');
-  const ultimos = digitos.slice(-4);
-  const marca = (data.creditCard?.creditCardBrand ?? '').slice(0, 20);
   return {
-    subscriptionId: data.id,
-    lastDigits: /^\d{4}$/.test(ultimos) ? ultimos : '',
-    brand: /^[A-Za-z_ ]*$/.test(marca) ? marca : '',
+    authorizationId: data.id,
+    qr: data.payload
+      ? {
+          image: data.encodedImage ?? '',
+          code: data.payload,
+          expires_at: data.immediateQrCode?.expirationDate ?? null,
+        }
+      : null,
   };
 }
+
+export async function cancelPixAutomaticAuthorization(
+  env: Env,
+  authorizationId: string,
+): Promise<boolean> {
+  const res = await asaasFetch(
+    env,
+    `/pix/automatic/authorizations/${encodeURIComponent(authorizationId)}`,
+    { method: 'DELETE' },
+  );
+  return res.ok;
+}
+
+// CARTAO: fica FORA da nossa infra de proposito (F2.18). O Asaas nao oferece
+// tokenizacao no navegador e exige SAQ-D de quem digita cartao em pagina
+// propria, entao quem quiser cartao vai para um Link de Pagamento recorrente
+// hospedado por eles. Nenhum dado de cartao toca este codigo.
+// O link e criado uma vez pelo operador (scripts/billing.ts) e a URL fica em
+// CARD_CHECKOUT_URL.
 
 // Desfaz a assinatura quando o vinculo no nosso banco falha: sem isso o cliente
 // seria cobrado por uma assinatura que o webhook nunca conseguiria resolver.

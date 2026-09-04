@@ -47,6 +47,7 @@ interface TenantWebhookRow {
 interface BillingRow {
   tenant_id: string;
   asaas_customer_id?: string;
+  payment_method?: string;
 }
 
 // Tetos de tentativa (janela diaria UTC, mesmos contadores KV do /hooks/connect).
@@ -330,22 +331,33 @@ eventHooks.post('/billing', async (c) => {
   const event = pickString(asRecord(body), 'event');
   const payment = asRecord(asRecord(body).payment);
   const subscriptionId = pickString(payment, 'subscription');
+  // No Pix Automatico a assinatura nasce so depois que o pagador autoriza no
+  // banco dele, entao a primeira cobranca pode chegar sem `subscription`. O
+  // `customer` sempre vem e sempre foi gravado por nos: e a ancora confiavel.
+  const customerId = pickString(payment, 'customer');
   if (!event) {
     return c.json({ error: 'invalid_payload' }, 400);
   }
 
   const goesActive = BILLING_ACTIVE_EVENTS.has(event);
   const goesOverdue = BILLING_OVERDUE_EVENTS.has(event);
-  if ((!goesActive && !goesOverdue) || !subscriptionId) {
+  const chave = subscriptionId ?? customerId;
+  if ((!goesActive && !goesOverdue) || !chave) {
     return c.json({ ok: true, ignored: true });
   }
-  if (await entityThrottled(c, 'billing-sub', subscriptionId)) {
+  if (await entityThrottled(c, 'billing-sub', chave)) {
     return c.json({ error: 'rate_limited' }, 429);
   }
 
+  // Resolve por assinatura quando ela existe; senao (Pix Automatico), por
+  // cliente. Os dois campos vem do NOSSO banco; o payload so fornece a chave
+  // de busca, nunca a identidade do tenant.
+  const filtro: Record<string, string> = subscriptionId
+    ? { asaas_subscription_id: `eq.${subscriptionId}` }
+    : { asaas_customer_id: `eq.${customerId}` };
   const subs = await supabaseSelect<BillingRow>(c.env, 'billing_subscriptions', {
-    asaas_subscription_id: `eq.${subscriptionId}`,
-    select: 'tenant_id,asaas_customer_id',
+    ...filtro,
+    select: 'tenant_id,asaas_customer_id,payment_method',
     limit: '1',
   });
   const sub = subs[0];
@@ -355,11 +367,19 @@ eventHooks.post('/billing', async (c) => {
     return c.json({ ok: true, ignored: true });
   }
 
+  // Atualiza pelo tenant (chave primaria da tabela): funciona tanto quando
+  // achamos por assinatura quanto por cliente. E aproveita para gravar o id da
+  // assinatura na primeira vez que ele aparece (Pix Automatico so o revela
+  // depois que o pagador autoriza).
   await supabaseUpdate(
     c.env,
     'billing_subscriptions',
-    { asaas_subscription_id: `eq.${subscriptionId}` },
-    { status: goesActive ? 'active' : 'overdue', updated_at: new Date().toISOString() },
+    { tenant_id: `eq.${sub.tenant_id}` },
+    {
+      status: goesActive ? 'active' : 'overdue',
+      updated_at: new Date().toISOString(),
+      ...(subscriptionId ? { asaas_subscription_id: subscriptionId } : {}),
+    },
   );
 
   if (goesOverdue) {
@@ -384,11 +404,12 @@ eventHooks.post('/billing', async (c) => {
     // ciclo e o cliente paga na mao), entao sem o aviso mensal ele nao paga o
     // mes 2 e a conta pausa.
     //
-    // SO para Pix: cartao debita sozinho e nao precisa de aviso, e religar a
-    // notificacao ali reabriria o B2 (cobranca por e-mail contra o endereco que
-    // o pagador digitou) de forma automatica. Metodo desconhecido = nao religa.
-    const metodoPagamento = pickString(payment, 'billingType');
-    if (sub.asaas_customer_id && metodoPagamento === 'PIX') {
+    // SO para Pix MANUAL, e decidido pelo metodo que NOS gravamos, nunca pelo
+    // payload. Pix Automatico e cartao debitam sozinhos e nao precisam de
+    // aviso; religar neles reabriria, de forma automatica, a cobranca por
+    // e-mail contra o endereco que o pagador digitou. Metodo desconhecido nao
+    // religa.
+    if (sub.asaas_customer_id && sub.payment_method === 'pix') {
       fireAndForget(c, async () => {
         const ok = await enableCustomerNotifications(c.env, sub.asaas_customer_id!);
         if (!ok) console.error('billing_enable_notifications_failed');

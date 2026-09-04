@@ -2,11 +2,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { Env } from '../src/types';
 import { memoryKV } from './helpers';
 
-// Checkout proprio (F2.14): rota publica que cria tenant + cobranca.
-// As camadas provadas aqui vieram do security review:
+// Checkout proprio (F2.14, reformulado em F2.18): rota publica que cria
+// tenant + autorizacao de Pix Automatico. Cartao NAO passa por aqui (fora do
+// escopo PCI, ver decisoes). As camadas provadas vieram do security review:
 //   fail-closed (sem chave/KV), content-type (anti CSRF cross-site), throttle
 //   em 3 eixos, modulo 11 do documento, lock de idempotencia, capacidade de
-//   seats, ordem das operacoes e cancelamento da assinatura orfa.
+//   seats, ordem das operacoes e cancelamento da autorizacao orfa.
 
 const ASAAS_KEY = 'asaas-key-nunca-vaza';
 const TENANT_ID = 'tenant-novo-uuid';
@@ -33,27 +34,22 @@ vi.mock('../src/lib/supabase', () => ({
 
 vi.mock('../src/lib/asaas', () => ({
   createCustomer: vi.fn(async () => 'cus_123'),
-  createSubscription: vi.fn(async () => 'sub_123'),
-  createCardSubscription: vi.fn(async () => ({
-    subscriptionId: 'sub_card_123',
-    lastDigits: '4242',
-    brand: 'VISA',
+  createPixAutomaticAuthorization: vi.fn(async () => ({
+    authorizationId: 'auth_123',
+    qr: {
+      image: 'BASE64IMG',
+      code: '00020126PIXCOPIAECOLA',
+      expires_at: '2026-09-04 23:59:59',
+    },
   })),
-  cancelSubscription: vi.fn(async () => true),
-  firstPaymentId: vi.fn(async () => 'pay_123'),
-  pixQrCode: vi.fn(async () => ({
-    encodedImage: 'BASE64IMG',
-    payload: '00020126PIXCOPIAECOLA',
-    expirationDate: '2026-09-04 23:59:59',
-  })),
+  cancelPixAutomaticAuthorization: vi.fn(async () => true),
 }));
 
 import app from '../src/index';
 import {
   createCustomer,
-  createSubscription,
-  createCardSubscription,
-  cancelSubscription,
+  createPixAutomaticAuthorization,
+  cancelPixAutomaticAuthorization,
 } from '../src/lib/asaas';
 import { supabaseInsert, supabaseDelete } from '../src/lib/supabase';
 
@@ -75,26 +71,6 @@ const BODY_OK = { name: 'Maria Souza', email: 'maria@example.com', cpf_cnpj: CPF
 // Cada teste usa um documento/e-mail diferentes quando precisa escapar do lock.
 function corpo(extra: Partial<typeof BODY_OK> = {}) {
   return { ...BODY_OK, ...extra };
-}
-
-// Numero de cartao ficticio usado so nas assercoes de nao-vazamento.
-const CARTAO_NUM = '5162306219378829';
-const CCV = '318';
-
-function corpoCartao(extra: Record<string, unknown> = {}) {
-  return {
-    ...BODY_OK,
-    payment_method: 'card',
-    card: {
-      holder_name: 'MARIA SOUZA',
-      number: CARTAO_NUM,
-      expiry_month: '12',
-      expiry_year: '2030',
-      ccv: CCV,
-    },
-    holder: { postal_code: '80035-210', address_number: '103', phone: '41999998888' },
-    ...extra,
-  };
 }
 
 function post(
@@ -134,8 +110,6 @@ afterEach(() => {
     expect(line).not.toContain(ASAAS_KEY);
     expect(line).not.toContain('maria@example.com');
     expect(line).not.toContain('52998224725');
-    expect(line).not.toContain(CARTAO_NUM);
-    expect(line).not.toContain(CCV);
   }
   errorSpy.mockRestore();
 });
@@ -226,7 +200,7 @@ describe('POST /checkout, caminho feliz e ordem', () => {
       ok: true,
       data: {
         value: 57,
-        method: 'pix',
+        method: 'pix_automatic',
         pix: {
           image: 'BASE64IMG',
           code: '00020126PIXCOPIAECOLA',
@@ -236,19 +210,20 @@ describe('POST /checkout, caminho feliz e ordem', () => {
     });
     expect(text).not.toContain(TENANT_ID);
     expect(text).not.toContain('cus_123');
-    expect(text).not.toContain('sub_123');
+    expect(text).not.toContain('auth_123');
 
-    // Cliente (nao cobra) antes do tenant; assinatura (cobra) depois dele.
+    // Cliente (nao cobra) antes do tenant; autorizacao (cobra) depois dele.
     const chamadas = vi.mocked(createCustomer).mock.invocationCallOrder[0]!;
-    const assinatura = vi.mocked(createSubscription).mock.invocationCallOrder[0]!;
-    expect(chamadas).toBeLessThan(assinatura);
+    const autorizacao = vi.mocked(createPixAutomaticAuthorization).mock.invocationCallOrder[0]!;
+    expect(chamadas).toBeLessThan(autorizacao);
     expect(inserted.map((i) => i.table)).toEqual(['tenants', 'billing_subscriptions']);
 
     const vinculo = inserted[1];
     expect(vinculo).toBeDefined();
     expect(vinculo!.row).toMatchObject({
       tenant_id: TENANT_ID,
-      asaas_subscription_id: 'sub_123',
+      asaas_authorization_id: 'auth_123',
+      payment_method: 'pix_automatic',
       status: 'pending',
     });
 
@@ -258,146 +233,6 @@ describe('POST /checkout, caminho feliz e ordem', () => {
       cpfCnpj: '52998224725',
       notificationsEnabled: false,
     });
-  });
-});
-
-describe('POST /checkout, cartao (cobranca automatica)', () => {
-  it('cria assinatura no cartao e devolve so bandeira e 4 digitos', async () => {
-    const res = await post(corpoCartao(), baseEnv());
-    expect(res.status).toBe(200);
-    const text = await res.text();
-
-    expect(JSON.parse(text)).toEqual({
-      ok: true,
-      data: { value: 57, method: 'card', card: { last_digits: '4242', brand: 'VISA' } },
-    });
-    // O numero e o CCV NUNCA voltam na resposta.
-    expect(text).not.toContain(CARTAO_NUM);
-    expect(text).not.toContain(CCV);
-
-    // Foi pelo caminho do cartao, nao pelo Pix.
-    expect(createCardSubscription).toHaveBeenCalledTimes(1);
-    expect(createSubscription).not.toHaveBeenCalled();
-
-    // O titular leva os dados exigidos pelo antifraude.
-    const args = vi.mocked(createCardSubscription).mock.calls[0]![1];
-    expect(args).toMatchObject({
-      card: { number: CARTAO_NUM, expiryMonth: '12' },
-      holder: { cpfCnpj: '52998224725', postalCode: '80035210', phone: '41999998888' },
-    });
-  });
-
-  it('o vinculo gravado no banco nunca carrega dado de cartao', async () => {
-    await post(corpoCartao(), baseEnv());
-    const gravado = JSON.stringify(inserted);
-    expect(gravado).not.toContain(CARTAO_NUM);
-    expect(gravado).not.toContain(CCV);
-    expect(gravado).not.toContain('MARIA SOUZA');
-  });
-
-  it.each([
-    [{ number: '123' }, 'invalid_card_number'],
-    [{ expiry_month: '13' }, 'invalid_card_expiry'],
-    [{ expiry_year: '30' }, 'invalid_card_expiry'],
-    [{ ccv: '1' }, 'invalid_card_ccv'],
-    [{ holder_name: '' }, 'invalid_card_holder'],
-  ] as const)('cartao invalido (%#) recusado sem tocar o Asaas', async (patch, erro) => {
-    const base = corpoCartao();
-    const res = await post(
-      { ...base, card: { ...base.card, ...patch } },
-      baseEnv(),
-    );
-    expect(res.status).toBe(400);
-    expect(await res.json()).toEqual({ error: erro });
-    expect(createCardSubscription).not.toHaveBeenCalled();
-    expect(createCustomer).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    [{ postal_code: '123' }, 'invalid_postal_code'],
-    [{ address_number: '' }, 'invalid_address_number'],
-    [{ phone: '123' }, 'invalid_phone'],
-  ] as const)('titular incompleto (%#) recusado', async (patch, erro) => {
-    const base = corpoCartao();
-    const res = await post(
-      { ...base, holder: { ...base.holder, ...patch } },
-      baseEnv(),
-    );
-    expect(res.status).toBe(400);
-    expect(await res.json()).toEqual({ error: erro });
-    expect(createCardSubscription).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    // Luhn errado (digito verificador do cartao).
-    [{ number: '4111111111111112' }, 'invalid_card_number'],
-    // Validade no passado.
-    [{ expiry_year: '2020' }, 'invalid_card_expiry'],
-    // Ano absurdo.
-    [{ expiry_year: '9999' }, 'invalid_card_expiry'],
-  ] as const)('cartao com validade/Luhn ruim (%#) e barrado localmente', async (patch, erro) => {
-    const base = corpoCartao();
-    const res = await post({ ...base, card: { ...base.card, ...patch } }, baseEnv());
-    expect(res.status).toBe(400);
-    expect(await res.json()).toEqual({ error: erro });
-    expect(createCardSubscription).not.toHaveBeenCalled();
-  });
-
-  it('mes/ano como numero (nao string) sao aceitos', async () => {
-    const base = corpoCartao();
-    const res = await post(
-      { ...base, card: { ...base.card, expiry_month: 12, expiry_year: 2030 } },
-      baseEnv(),
-    );
-    expect(res.status).toBe(200);
-  });
-
-  it('sem CF-Connecting-IP o remoteIp NAO vai como literal invalido', async () => {
-    await post(corpoCartao(), baseEnv());
-    const args = vi.mocked(createCardSubscription).mock.calls[0]![1];
-    // Em teste nao ha header de IP: o campo deve ser null, nunca 'unknown'.
-    expect(args.remoteIp).toBeNull();
-  });
-
-  it('recusa libera o lock: o cliente consegue tentar outro cartao na hora', async () => {
-    const env = baseEnv();
-    vi.mocked(createCardSubscription).mockRejectedValueOnce(
-      new Error('asaas_card_failed:400'),
-    );
-    const recusado = await post(corpoCartao(), env);
-    expect(recusado.status).toBe(402);
-
-    // Mesmo e-mail e documento, outro cartao: nao pode cair em 409.
-    const segunda = await post(corpoCartao(), env);
-    expect(segunda.status).toBe(200);
-  });
-
-  it('tres recusas no mesmo IP travam o card testing', async () => {
-    const env = baseEnv();
-    for (let i = 0; i < 3; i++) {
-      vi.mocked(createCardSubscription).mockRejectedValueOnce(
-        new Error('asaas_card_failed:400'),
-      );
-      const res = await post(
-        corpoCartao({ email: `t${i}@example.com`, cpf_cnpj: CNPJ_OK }),
-        env,
-        { ip: '7.7.7.7' },
-      );
-      expect(res.status).toBe(402);
-    }
-    const bloqueado = await post(
-      corpoCartao({ email: 'quarto@example.com' }),
-      env,
-      { ip: '7.7.7.7' },
-    );
-    expect(bloqueado.status).toBe(429);
-  });
-
-  it('sem payment_method o padrao continua sendo Pix', async () => {
-    const res = await post(BODY_OK, baseEnv());
-    const json = (await res.json()) as { data: { method: string } };
-    expect(json.data.method).toBe('pix');
-    expect(createCardSubscription).not.toHaveBeenCalled();
   });
 });
 
@@ -413,7 +248,7 @@ describe('POST /checkout, falhas e abusos', () => {
     expect(inserted).toHaveLength(0);
   });
 
-  it('B3: falha ao gravar o vinculo CANCELA a assinatura no Asaas', async () => {
+  it('B3: falha ao gravar o vinculo CANCELA a autorizacao no Asaas', async () => {
     vi.mocked(supabaseInsert).mockImplementationOnce(async () => [{ id: TENANT_ID }]);
     vi.mocked(supabaseInsert).mockRejectedValueOnce(
       new Error('supabase_insert_failed:500'),
@@ -421,10 +256,13 @@ describe('POST /checkout, falhas e abusos', () => {
     const res = await post(BODY_OK, baseEnv());
     expect(res.status).toBe(502);
     expect(await res.json()).toEqual({ error: 'billing_unavailable' });
-    expect(cancelSubscription).toHaveBeenCalledWith(expect.anything(), 'sub_123');
-    // O id da assinatura fica no log para reconciliacao manual.
+    expect(cancelPixAutomaticAuthorization).toHaveBeenCalledWith(
+      expect.anything(),
+      'auth_123',
+    );
+    // O id da autorizacao fica no log para reconciliacao manual.
     const linhas = errorSpy.mock.calls.map((c) => String(c[0]));
-    expect(linhas.some((l) => l.includes('checkout_orphan_subscription'))).toBe(true);
+    expect(linhas.some((l) => l.includes('checkout_orphan_authorization'))).toBe(true);
   });
 
   it('I5: sem seat livre responde 503 sold_out, sem cobrar', async () => {
@@ -442,7 +280,7 @@ describe('POST /checkout, falhas e abusos', () => {
     const segunda = await post(BODY_OK, env);
     expect(segunda.status).toBe(409);
     expect(await segunda.json()).toEqual({ error: 'checkout_in_progress' });
-    expect(vi.mocked(createSubscription).mock.calls).toHaveLength(1);
+    expect(vi.mocked(createPixAutomaticAuthorization).mock.calls).toHaveLength(1);
   });
 
   it('I2: teto por documento corta a enumeracao mesmo trocando de IP', async () => {
@@ -458,19 +296,6 @@ describe('POST /checkout, falhas e abusos', () => {
       ip: '1.2.3.9',
     });
     expect(bloqueado.status).toBe(429);
-  });
-
-  it('cartao recusado vira 402 e o tenant orfao e removido', async () => {
-    vi.mocked(createCardSubscription).mockRejectedValueOnce(
-      new Error('asaas_card_failed:400'),
-    );
-    const res = await post(corpoCartao(), baseEnv());
-    expect(res.status).toBe(402);
-    expect(await res.json()).toEqual({ error: 'card_declined' });
-    // Digitar o cartao errado nao pode deixar lixo no banco.
-    expect(supabaseDelete).toHaveBeenCalledWith(expect.anything(), 'tenants', {
-      id: `eq.${TENANT_ID}`,
-    });
   });
 
   it('throttle por IP: acima do teto responde 429', async () => {
