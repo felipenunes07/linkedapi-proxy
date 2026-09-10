@@ -22,7 +22,9 @@
     "deploy:setup": "node scripts/setup-deploy.ts",
     "billing:subscribe": "node scripts/billing.ts subscribe",
     "billing:status": "node scripts/billing.ts status",
-    "webhook:register": "node scripts/webhooks.ts"
+    "webhook:register": "node scripts/webhooks.ts",
+    "portal:link": "node scripts/portal.ts link",
+    "smoke": "bash scripts/smoke-golive.sh"
   },
   "dependencies": {
     "hono": "^4.6.0"

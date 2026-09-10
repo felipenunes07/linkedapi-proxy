@@ -42,6 +42,14 @@ export interface Env {
   // do link de reconexao; mesma variavel dos scripts). Sem ela, a automacao de
   // link nao roda (so a notificacao de desconexao).
   PUBLIC_BASE_URL?: string;
+
+  // Painel do cliente (F2.20). URL https da pagina do painel na landing: o
+  // link dos e-mails e o redirect do wizard de conexao apontam para ela.
+  PORTAL_URL?: string;
+  // E-mail transacional (Resend). Opcionais: sem os dois nada e enviado e o
+  // onboarding segue pelo link que o checkout ja mostra na tela.
+  RESEND_API_KEY?: string;
+  EMAIL_FROM?: string;
 }
 
 // Acoes de escrita sujeitas a rate limit. Sao as que restringem contas no

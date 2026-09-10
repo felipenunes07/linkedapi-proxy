@@ -7,6 +7,8 @@ import type { Env } from '../src/types';
 
 const KEY = 'lk_live_key_valida';
 const KEY_SEM_CONTA = 'lk_live_key_tenant_sem_conta';
+const KEY_PAUSADA = 'lk_live_key_tenant_pausado';
+const KEY_CAIDA = 'lk_live_key_tenant_sessao_caida';
 const ACCT = 'acct-interno-que-nao-vaza';
 
 import { hashApiKey } from '../src/lib/tenants';
@@ -14,22 +16,26 @@ import { hashApiKey } from '../src/lib/tenants';
 vi.mock('../src/lib/supabase', () => ({
   supabaseSelect: vi.fn(
     async (_env: Env, table: string, filters: Record<string, string>) => {
-      const hash = await hashApiKey(KEY);
-      const hashSemConta = await hashApiKey(KEY_SEM_CONTA);
+      const porChave: Record<string, string> = {
+        [await hashApiKey(KEY)]: 't1',
+        [await hashApiKey(KEY_SEM_CONTA)]: 't3',
+        [await hashApiKey(KEY_PAUSADA)]: 't4',
+        [await hashApiKey(KEY_CAIDA)]: 't5',
+      };
       if (table === 'api_keys') {
-        if (filters.key_hash === `eq.${hash}`) return [{ tenant_id: 't1' }];
-        if (filters.key_hash === `eq.${hashSemConta}`) {
-          return [{ tenant_id: 't3' }];
-        }
-        return [];
+        const tenant = porChave[String(filters.key_hash).replace(/^eq\./, '')];
+        return tenant ? [{ tenant_id: tenant }] : [];
       }
       if (table === 'tenants') {
-        if (filters.id === 'eq.t1') return [{ id: 't1' }];
-        if (filters.id === 'eq.t3') return [{ id: 't3' }];
-        return [];
+        const id = String(filters.id).replace(/^eq\./, '');
+        return ['t1', 't3', 't4', 't5'].includes(id) ? [{ id }] : [];
       }
       if (table === 'connected_accounts') {
         if (filters.tenant_id === 'eq.t1') return [{ unipile_account_id: ACCT }];
+        // t4/t5: ha conta, mas nao ativa (a busca por active nao acha nada).
+        if (filters.status === 'eq.active') return [];
+        if (filters.tenant_id === 'eq.t4') return [{ status: 'paused' }];
+        if (filters.tenant_id === 'eq.t5') return [{ status: 'disconnected' }];
         return []; // t3: tenant ativo, mas SEM conta conectada
       }
       return [];
@@ -384,17 +390,35 @@ describe('validacao de corpo', () => {
   });
 });
 
-describe('resolucao de tenant', () => {
-  it('chave valida de tenant SEM conta conectada responde 401 (nao age por ninguem)', async () => {
+describe('resolucao de tenant (F2.22: motivo claro quando a conta nao esta ativa)', () => {
+  it.each([
+    [KEY_SEM_CONTA, 409, 'linkedin_not_connected'],
+    [KEY_PAUSADA, 402, 'account_paused'],
+    [KEY_CAIDA, 409, 'account_disconnected'],
+  ] as const)('chave valida sem conta ativa (%s) nao age por ninguem: %i %s', async (key, status, erro) => {
     const res = await postJson(
       baseEnv(),
       '/v1/messages',
       JSON.stringify({ chat_id: 'c1', text: 'oi' }),
-      KEY_SEM_CONTA,
+      key,
+    );
+    expect(res.status).toBe(status);
+    const text = await res.text();
+    expect(JSON.parse(text)).toEqual({ error: erro });
+    // Sem vazar nada da origem nem ids internos.
+    expect(text).not.toContain('acct');
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('chave inexistente continua 401 invalid_api_key (nada muda para quem nao tem chave)', async () => {
+    const res = await postJson(
+      baseEnv(),
+      '/v1/messages',
+      JSON.stringify({ chat_id: 'c1', text: 'oi' }),
+      'lk_live_chave_que_nao_existe',
     );
     expect(res.status).toBe(401);
     expect(await res.json()).toEqual({ error: 'invalid_api_key' });
-    expect(sendMessage).not.toHaveBeenCalled();
   });
 });
 

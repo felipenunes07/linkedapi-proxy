@@ -43,6 +43,19 @@ function counterKey(tenantId: string, action: RateLimitAction): string {
   return `rl:${tenantId}:${action}:${day}`;
 }
 
+// Teto de TENTATIVAS (achado do review F2.13, decisao F2.22): a cota acima so
+// conta escrita aceita (M3.10), entao uma chave valida podia martelar a origem
+// com chat_id arbitrario sem limite nenhum (custo, risco de throttle na
+// conta-mestra, enumeracao residual). Este segundo contador soma TODA tentativa
+// (aceita ou nao) e corta em 10x o limite diario. Nao muda a regra M3.10: erro
+// continua sem consumir a cota de escrita.
+const ATTEMPT_MULTIPLIER = 10;
+
+function attemptsKey(tenantId: string, action: RateLimitAction): string {
+  const day = new Date().toISOString().slice(0, 10);
+  return `rla:${tenantId}:${action}:${day}`;
+}
+
 // Fabrica o middleware de rate limit para uma acao de escrita. Fica antes do
 // handler: se ja estourou a janela, responde 429 ANTES de chamar a Unipile.
 //
@@ -73,6 +86,30 @@ export function rateLimit(
         429,
       );
     }
+
+    // Toda tentativa conta aqui, ANTES de chamar a origem (F2.22). Le primeiro
+    // e, acima do teto, recusa SEM gravar: cada escrita no KV custa e o KV
+    // aceita ~1 escrita/s por chave. A escrita e best-effort (o teto ja e
+    // aproximado): falha dela nunca vira 500 para o integrador.
+    const aKey = attemptsKey(tenant.tenantId, action);
+    const attempts = Number((await kv.get(aKey)) ?? '0');
+    if (attempts >= limit * ATTEMPT_MULTIPLIER) {
+      const retryAfter = secondsUntilNextUtcMidnight(new Date());
+      c.header('Retry-After', String(retryAfter));
+      return c.json(
+        {
+          error: 'rate_limited',
+          reason: 'too_many_attempts',
+          action,
+          limit,
+          retry_after: retryAfter,
+        },
+        429,
+      );
+    }
+    await kv
+      .put(aKey, String(attempts + 1), { expirationTtl: COUNTER_TTL_SECONDS })
+      .catch(() => {});
 
     await next();
   };

@@ -114,9 +114,34 @@ configurada, as rotas respondem 404 (a superficie nem existe).
   teto de seats (`SEAT_CAP`, default 10). E o mecanismo central da economia do
   negocio (fracionar o piso de ~10 contas).
 
+### 8. Painel do cliente (F2.20/F2.21, migrations 0008-0009, `src/routes/portal.ts`)
+
+Onboarding sem operador. O checkout (`POST /checkout`, Pix Automatico) grava
+`tenants.contact_email` e devolve, junto com o QR, uma SESSAO do painel. A
+landing (`painel.html` + `js/painel.js`) usa essa sessao para:
+
+- `GET /portal/status`: assinatura, LinkedIn, chave, uso e limites do dia.
+- `POST /portal/connect`: link do wizard (create ou reconnect), so com
+  assinatura ativa e seat livre; o wizard devolve o cliente ao painel.
+- `POST /portal/key`: gera a chave (`lk_live_`, mostrada uma vez) e revoga as
+  anteriores; so com assinatura ativa + LinkedIn conectado.
+- `PUT /portal/email`: corrige o e-mail de contato ate o 1o pagamento.
+- `POST /portal/logout`: sai desta sessao ou de todas (`{"all": true}`).
+- `POST /portal/session`: troca o link do e-mail (uso unico) por sessao.
+- `POST /portal/login`: manda um link novo por e-mail (resposta generica).
+
+E-mail (Resend) e opcional: `RESEND_API_KEY` + `EMAIL_FROM`. Com ele, o
+`/hooks/billing` manda boas-vindas no 1o pagamento e o "entrar" funciona; sem
+ele, o acesso fica na sessao salva no navegador de quem pagou, e o operador
+tem `npm run portal:link -- <tenant_id>` como plano B.
+
 ## Verificacao
 
-- `npm run typecheck` + `npm test`: 100 testes verdes (14 arquivos), cobrindo
+- F2.20/F2.21: `npm run typecheck` + `npm test` com 174 testes verdes (16
+  arquivos); `test/portal.test.ts` cobre sessao x link, isolamento pelo token,
+  seats, trava de chave, correcao de e-mail, sair de todos e o login sem
+  oraculo. Security review dedicado: sem bloqueante (F2.21).
+- `npm run typecheck` + `npm test` (fechamento original): 100 testes verdes (14 arquivos), cobrindo
   limites por tenant, rotacao de chave, config de webhook (incl. destinos
   perigosos rejeitados), os tres hooks (gate/fail-closed/confirmacao upstream/
   transicoes/pausa intocavel/whitelist), assinatura HMAC verificavel, retry de
@@ -128,9 +153,9 @@ configurada, as rotas respondem 404 (a superficie nem existe).
 
 ## O que NAO entrou (consciente)
 
-- Onboarding self-service completo (cadastro -> pagamento -> conexao) e
-  qualquer UI/painel: hoje o operador roda scripts; painel e fase de
-  comercializacao.
+- ~~Onboarding self-service completo e painel~~ ENTROU no F2.20 (secao 8).
 - Fila duravel para webhooks (Queues) e retry alem de 3 tentativas.
-- Emissao da PRIMEIRA chave pelo cliente (a rotacao exige ja ter chave).
-- Nota fiscal, termos de uso, LGPD documental.
+- ~~Emissao da PRIMEIRA chave pelo cliente~~ ENTROU no F2.20 (`POST /portal/key`).
+- Nota fiscal. Termos de uso e politica de privacidade estao REDIGIDOS na
+  landing (termos.html, privacidade.html), com os dados da empresa em aberto e
+  pendentes de revisao juridica.

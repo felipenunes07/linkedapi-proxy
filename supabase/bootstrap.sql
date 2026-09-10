@@ -1,4 +1,4 @@
--- bootstrap.sql: as migrations 0001..0007 concatenadas para colar UMA vez no
+-- bootstrap.sql: as migrations 0001..0009 concatenadas para colar UMA vez no
 -- SQL Editor de um projeto Supabase novo/restaurado. Fonte da verdade sao os
 -- arquivos em supabase/migrations/; se eles mudarem, regenere este arquivo
 -- (concatene as migrations na ordem, com este cabecalho).
@@ -242,3 +242,112 @@ create table if not exists billing_subscriptions (
 alter table billing_subscriptions enable row level security;
 revoke all on billing_subscriptions from anon, authenticated;
 
+-- Migration 0008. Pix Automatico e checkout hospedado (decisao F2.18).
+--
+-- Motivo: o cartao saiu do nosso formulario (o Asaas nao oferece tokenizacao
+-- no navegador e exige SAQ-D de quem digita cartao em pagina propria). O
+-- caminho passa a ser:
+--   Pix Automatico  -> autorizacao unica, o Asaas debita sozinho todo mes
+--   Cartao          -> Checkout hospedado do Asaas (fora do nosso escopo PCI)
+--
+-- Duas mudancas no vinculo de cobranca:
+--   1. `asaas_subscription_id` deixa de ser obrigatorio: no Pix Automatico a
+--      assinatura so nasce DEPOIS que o pagador autoriza no banco dele, entao
+--      no momento do checkout so temos o id da autorizacao. (O unique continua:
+--      no Postgres varios NULL convivem num indice unique.)
+--   2. Colunas novas para o webhook saber com o que esta lidando.
+
+alter table billing_subscriptions
+  alter column asaas_subscription_id drop not null;
+
+alter table billing_subscriptions
+  add column if not exists payment_method text;
+
+alter table billing_subscriptions
+  add column if not exists asaas_authorization_id text;
+
+alter table billing_subscriptions
+  add column if not exists asaas_checkout_id text;
+
+do $$ begin
+  alter table billing_subscriptions
+    add constraint billing_subscriptions_payment_method_check
+    check (payment_method is null or payment_method in ('pix', 'pix_automatic', 'card'));
+exception when duplicate_object then null;
+end $$;
+
+-- O webhook resolve o tenant por assinatura OU por cliente (no Pix Automatico
+-- a cobranca pode chegar antes de sabermos o id da assinatura). Indice para a
+-- busca por cliente nao virar varredura.
+create index if not exists billing_subscriptions_customer_idx
+  on billing_subscriptions(asaas_customer_id);
+
+create index if not exists billing_subscriptions_authorization_idx
+  on billing_subscriptions(asaas_authorization_id);
+
+-- Migration 0009. Painel do cliente e onboarding automatico (decisoes F2.20
+-- e F2.21, esta ultima vinda do security review do F2.20).
+--
+-- Antes: o cliente pagava e parava ali; o operador rodava connect:link e
+-- key:issue na mao e mandava tudo por fora. Agora o proprio cliente, pelo
+-- painel da landing, conecta o LinkedIn e gera a chave.
+--
+-- Mudancas:
+--   1. tenants.contact_email: o e-mail que o comprador digitou no checkout,
+--      normalizado. So para os avisos da conta (boas-vindas, link de acesso).
+--      Dado pessoal: nunca vai para log nem sai em resposta a terceiros.
+--   2. tenants.welcome_sent_at: trava do e-mail de boas-vindas (sai uma vez;
+--      se o envio falhar, volta a NULL e o proximo evento de pagamento tenta).
+--   3. portal_tokens: credenciais do painel, SO o hash. Dois tipos:
+--        session (lk_portal_): vive no navegador do cliente, 14 dias.
+--        link    (lk_plink_):  vai DENTRO do e-mail; uso unico e curto, so
+--                              serve para ser trocado por uma sessao. A copia
+--                              que fica no provedor de e-mail ou num Safe Links
+--                              nao vira acesso depois de usada ou vencida.
+--   4. find_tenants_by_contact_email: busca por e-mail via RPC, com o e-mail
+--      no CORPO da chamada. Um filtro ?contact_email=eq.<email> poria o
+--      endereco no query string, que fica nos logs de API.
+
+alter table tenants add column if not exists contact_email text;
+alter table tenants add column if not exists welcome_sent_at timestamptz;
+create index if not exists tenants_contact_email_idx on tenants(contact_email);
+
+create table if not exists portal_tokens (
+  id          uuid primary key default gen_random_uuid(),
+  tenant_id   uuid not null references tenants(id) on delete cascade,
+  token_hash  text not null unique,
+  kind        text not null default 'session'
+              check (kind in ('session', 'link')),
+  status      text not null default 'active'
+              check (status in ('active', 'used', 'revoked')),
+  expires_at  timestamptz not null,
+  created_at  timestamptz not null default now()
+);
+create index if not exists portal_tokens_tenant_idx on portal_tokens(tenant_id);
+
+-- Mesma estrategia de RLS das outras tabelas: deny total a papeis publicos.
+-- So a service role (Worker e scripts) toca nesta tabela.
+alter table portal_tokens enable row level security;
+revoke all on portal_tokens from anon, authenticated;
+
+-- SECURITY INVOKER de proposito (review F2.21, M4): o unico chamador e a
+-- service role, que ja ignora a RLS. Com DEFINER, uma recriacao pelo dashboard
+-- sem o revoke abaixo viraria um oraculo publico de "este e-mail e cliente?".
+create or replace function find_tenants_by_contact_email(p_email text)
+returns table (id uuid)
+language sql
+stable
+security invoker
+set search_path = public
+as $$
+  select t.id
+  from tenants t
+  where t.contact_email = lower(trim(p_email))
+    and t.status = 'active'
+  order by t.created_at desc
+  limit 5;
+$$;
+
+revoke execute on function find_tenants_by_contact_email(text)
+  from public, anon, authenticated;
+grant execute on function find_tenants_by_contact_email(text) to service_role;

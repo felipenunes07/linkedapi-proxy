@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import type { MiddlewareHandler } from 'hono';
 import type { Env, Variables } from './types';
 import { authMiddleware } from './middleware/auth';
 import { rateLimit, recordUsage, persistUsage } from './middleware/rateLimit';
@@ -15,6 +16,7 @@ import { eventHooks } from './routes/eventHooks';
 import { checkout } from './routes/checkout';
 import { selfservice } from './routes/selfservice';
 import { admin } from './routes/admin';
+import { portal } from './routes/portal';
 
 // Data plane: o proxy. Pipeline por request:
 //   autenticar chave -> resolver tenant + account_id (server-side)
@@ -58,18 +60,22 @@ app.route('/hooks', eventHooks);
 // API administrativa (operador). Sem ADMIN_API_KEY configurada, responde 404.
 app.route('/admin', admin);
 
-// Checkout proprio (F2.14): chamado pelo JS da landing, que vive em outra
-// origem. CORS restrito a lista abaixo (nunca '*': a rota escreve no banco e
-// cria cobranca). Sem ASAAS_API_KEY a rota responde 404 (ver routes/checkout).
-const CHECKOUT_ORIGINS = new Set([
+// Rotas chamadas pelo JS da landing, que vive em outra origem: checkout
+// proprio (F2.14) e painel do cliente (F2.20). CORS restrito a lista abaixo
+// (nunca '*': as rotas escrevem no banco, criam cobranca e entregam
+// credencial). Sem ASAAS_API_KEY o checkout responde 404 (ver routes/checkout).
+const LANDING_ORIGINS = new Set([
   'https://linkedapi-site.pages.dev',
   'https://linkedapi.com.br',
   'https://www.linkedapi.com.br',
 ]);
 
-app.use('/checkout', async (c, next) => {
+const landingCors: MiddlewareHandler<{ Bindings: Env; Variables: Variables }> = async (
+  c,
+  next,
+) => {
   const origin = c.req.header('Origin');
-  const allowed = origin && CHECKOUT_ORIGINS.has(origin);
+  const allowed = origin && LANDING_ORIGINS.has(origin);
   // Origin presente e fora da lista: recusa antes do handler. CORS sozinho nao
   // impede escrita cross-site (o browser so esconde a RESPOSTA), entao o
   // bloqueio tem que acontecer aqui. Requisicao sem Origin (curl, server a
@@ -81,8 +87,8 @@ app.use('/checkout', async (c, next) => {
     if (!allowed) return c.body(null, 403);
     return c.body(null, 204, {
       'Access-Control-Allow-Origin': origin,
-      'Access-Control-Allow-Methods': 'POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'content-type',
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS',
+      'Access-Control-Allow-Headers': 'content-type, x-portal-token',
       'Access-Control-Max-Age': '86400',
       Vary: 'Origin',
     });
@@ -92,8 +98,15 @@ app.use('/checkout', async (c, next) => {
     c.res.headers.set('Access-Control-Allow-Origin', origin);
     c.res.headers.set('Vary', 'Origin');
   }
-});
+};
+
+app.use('/checkout', landingCors);
 app.route('/checkout', checkout);
+
+// Painel do cliente (F2.20): conectar LinkedIn e gerar chave sem operador.
+// Nao entra no openapi.json: e a conta do cliente, nao a API que ele integra.
+app.use('/portal/*', landingCors);
+app.route('/portal', portal);
 
 // Rotas protegidas da V1 (implementar por marco).
 const v1 = new Hono<{ Bindings: Env; Variables: Variables }>();

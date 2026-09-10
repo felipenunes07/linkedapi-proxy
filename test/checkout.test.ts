@@ -16,12 +16,19 @@ const CPF_OK = '529.982.247-25';
 const CNPJ_OK = '11.222.333/0001-81';
 
 const inserted: { table: string; row: Record<string, unknown> }[] = [];
-let contasAtivas: { id: string }[] = [];
+let contasAtivas: { id: string; tenant_id?: string }[] = [];
+let pendentesRecentes: { tenant_id: string }[] = [];
+let filtroPendentes: Record<string, string> | null = null;
 
 vi.mock('../src/lib/supabase', () => ({
-  supabaseSelect: vi.fn(async (_env: Env, table: string) =>
-    table === 'connected_accounts' ? contasAtivas : [],
-  ),
+  supabaseSelect: vi.fn(async (_env: Env, table: string, filters: Record<string, string>) => {
+    if (table === 'connected_accounts') return contasAtivas;
+    if (table === 'billing_subscriptions' && filters.status === 'eq.pending') {
+      filtroPendentes = filters;
+      return pendentesRecentes;
+    }
+    return [];
+  }),
   supabaseInsert: vi.fn(async (_env: Env, table: string, row: Record<string, unknown>) => {
     inserted.push({ table, row });
     if (table === 'tenants') return [{ id: TENANT_ID }];
@@ -98,6 +105,8 @@ let errorSpy: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
   inserted.length = 0;
   contasAtivas = [];
+  pendentesRecentes = [];
+  filtroPendentes = null;
   vi.clearAllMocks();
   errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 });
@@ -196,7 +205,8 @@ describe('POST /checkout, caminho feliz e ordem', () => {
     expect(res.status).toBe(200);
     const text = await res.text();
 
-    expect(JSON.parse(text)).toEqual({
+    const body = JSON.parse(text);
+    expect(body).toEqual({
       ok: true,
       data: {
         value: 57,
@@ -206,8 +216,13 @@ describe('POST /checkout, caminho feliz e ordem', () => {
           code: '00020126PIXCOPIAECOLA',
           expires_at: '2026-09-04 23:59:59',
         },
+        portal: {
+          token: expect.stringMatching(/^lk_portal_[0-9a-f]{64}$/),
+          expires_at: expect.any(String),
+        },
       },
     });
+    expect(res.headers.get('Cache-Control')).toBe('no-store');
     expect(text).not.toContain(TENANT_ID);
     expect(text).not.toContain('cus_123');
     expect(text).not.toContain('auth_123');
@@ -216,7 +231,19 @@ describe('POST /checkout, caminho feliz e ordem', () => {
     const chamadas = vi.mocked(createCustomer).mock.invocationCallOrder[0]!;
     const autorizacao = vi.mocked(createPixAutomaticAuthorization).mock.invocationCallOrder[0]!;
     expect(chamadas).toBeLessThan(autorizacao);
-    expect(inserted.map((i) => i.table)).toEqual(['tenants', 'billing_subscriptions']);
+    expect(inserted.map((i) => i.table)).toEqual([
+      'tenants',
+      'billing_subscriptions',
+      'portal_tokens',
+    ]);
+
+    // F2.20: e-mail normalizado no tenant (e onde o "entrar no painel" busca).
+    expect(inserted[0]!.row).toMatchObject({ contact_email: 'maria@example.com' });
+    // Token do painel: do tenant novo, e SO o hash no banco.
+    const tokenRow = inserted[2]!.row;
+    expect(tokenRow).toMatchObject({ tenant_id: TENANT_ID, status: 'active' });
+    expect(tokenRow.token_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.stringify(tokenRow)).not.toContain(body.data.portal.token);
 
     const vinculo = inserted[1];
     expect(vinculo).toBeDefined();
@@ -265,12 +292,37 @@ describe('POST /checkout, falhas e abusos', () => {
     expect(linhas.some((l) => l.includes('checkout_orphan_authorization'))).toBe(true);
   });
 
+  it('F2.20: falha ao criar o token do painel NAO desfaz a venda', async () => {
+    vi.mocked(supabaseInsert).mockImplementationOnce(async () => [{ id: TENANT_ID }]);
+    vi.mocked(supabaseInsert).mockImplementationOnce(async () => []);
+    vi.mocked(supabaseInsert).mockRejectedValueOnce(new Error('supabase_insert_failed:500'));
+    const res = await post(BODY_OK, baseEnv());
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { data: { portal: unknown; pix: unknown } };
+    expect(body.data.portal).toBeNull();
+    expect(body.data.pix).not.toBeNull();
+    expect(cancelPixAutomaticAuthorization).not.toHaveBeenCalled();
+  });
+
   it('I5: sem seat livre responde 503 sold_out, sem cobrar', async () => {
-    contasAtivas = Array.from({ length: 10 }, (_, i) => ({ id: `ca-${i}` }));
+    contasAtivas = Array.from({ length: 10 }, (_, i) => ({ id: `ca-${i}`, tenant_id: `t-${i}` }));
     const res = await post(BODY_OK, baseEnv());
     expect(res.status).toBe(503);
     expect(await res.json()).toEqual({ error: 'sold_out' });
     expect(createCustomer).not.toHaveBeenCalled();
+  });
+
+  it('F2.23: checkouts pendentes dentro da validade do Pix seguram vaga', async () => {
+    contasAtivas = Array.from({ length: 6 }, (_, i) => ({ id: `ca-${i}`, tenant_id: `t-${i}` }));
+    pendentesRecentes = Array.from({ length: 4 }, (_, i) => ({ tenant_id: `p-${i}` }));
+    const res = await post(BODY_OK, baseEnv());
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: 'sold_out' });
+    expect(createCustomer).not.toHaveBeenCalled();
+    // So conta pendente recente (criado dentro da ultima hora).
+    const desde = Date.parse(String(filtroPendentes?.created_at).replace(/^gt\./, ''));
+    expect(Date.now() - desde).toBeGreaterThan(55 * 60 * 1000);
+    expect(Date.now() - desde).toBeLessThan(65 * 60 * 1000);
   });
 
   it('I1: segunda tentativa do mesmo cliente esbarra no lock (409)', async () => {

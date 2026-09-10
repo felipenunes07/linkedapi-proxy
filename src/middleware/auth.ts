@@ -1,6 +1,6 @@
 import type { MiddlewareHandler } from 'hono';
 import type { Env, Variables } from '../types';
-import { resolveTenant, touchApiKey } from '../lib/tenants';
+import { resolveTenantDetailed, touchApiKey } from '../lib/tenants';
 import { fireAndForget } from '../lib/async';
 
 // Autentica a API key NOSSA (header X-API-KEY) e injeta o tenant resolvido no
@@ -15,10 +15,15 @@ export const authMiddleware: MiddlewareHandler<{
     return c.json({ error: 'missing_api_key' }, 401);
   }
 
-  const tenant = await resolveTenant(c.env, apiKey);
-  if (!tenant) {
-    return c.json({ error: 'invalid_api_key' }, 401);
+  const resolved = await resolveTenantDetailed(c.env, apiKey);
+  if ('error' in resolved) {
+    // Chave inexistente/revogada ou tenant suspenso: 401. Chave valida sem
+    // LinkedIn ativo: 402 (pagamento em atraso) ou 409 (sessao caida / nunca
+    // conectou), para o cliente saber o que fazer (F2.22). Nenhum dos casos
+    // chega a Unipile.
+    return c.json({ error: resolved.error }, resolved.status);
   }
+  const tenant = resolved.tenant;
 
   // Auditoria (fase 2): last_used_at da chave, best-effort pos-resposta.
   // Deduplicado por KV (1 escrita/hora por chave): sem isso, cada request

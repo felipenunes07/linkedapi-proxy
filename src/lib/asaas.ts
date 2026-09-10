@@ -267,6 +267,26 @@ export async function cancelPixAutomaticAuthorization(
   return res.ok;
 }
 
+// Corrige o e-mail do cliente no Asaas (F2.23). E para esse endereco que o
+// Asaas manda faturas e avisos quando as notificacoes forem ligadas no 1o
+// pagamento; corrigir so no nosso banco deixaria as faturas indo para quem
+// recebeu o e-mail digitado errado. Log so do status: o corpo de erro pode
+// ecoar o endereco.
+export async function updateCustomerEmail(
+  env: Env,
+  customerId: string,
+  email: string,
+): Promise<boolean> {
+  const res = await asaasFetch(env, `/customers/${encodeURIComponent(customerId)}`, {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  });
+  if (!res.ok) {
+    console.error(`asaas_customer_email_rejected:${res.status}`);
+  }
+  return res.ok;
+}
+
 // CARTAO: fica FORA da nossa infra de proposito (F2.18). O Asaas nao oferece
 // tokenizacao no navegador e exige SAQ-D de quem digita cartao em pagina
 // propria, entao quem quiser cartao vai para um Link de Pagamento recorrente

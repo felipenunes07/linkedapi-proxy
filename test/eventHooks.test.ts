@@ -24,7 +24,15 @@ interface TokenRow {
 }
 const db: {
   accounts: AccountRow[];
-  tenants: Record<string, { webhook_url: string | null; webhook_secret: string | null }>;
+  tenants: Record<
+    string,
+    {
+      webhook_url: string | null;
+      webhook_secret: string | null;
+      contact_email?: string;
+      welcome_sent_at?: string | null;
+    }
+  >;
   billing: Array<{ tenant_id: string; asaas_subscription_id: string; status: string }>;
   tokens: TokenRow[];
 } = { accounts: [], tenants: {}, billing: [], tokens: [] };
@@ -88,6 +96,16 @@ vi.mock('../src/lib/supabase', () => ({
         for (const row of rows) Object.assign(row, patch);
         return rows;
       }
+      if (table === 'tenants') {
+        // Suporta a reivindicacao das boas-vindas (welcome_sent_at is.null).
+        const id = filters.id?.replace(/^eq\./, '');
+        const t = id ? db.tenants[id] : undefined;
+        if (!t) return [];
+        if (filters.welcome_sent_at === 'is.null' && t.welcome_sent_at) return [];
+        if (filters.contact_email === 'not.is.null' && !t.contact_email) return [];
+        Object.assign(t, patch);
+        return [{ id, ...t }];
+      }
       return [];
     },
   ),
@@ -109,8 +127,14 @@ vi.mock('../src/lib/webhooks', () => ({
   deliverWebhook: vi.fn(async () => true),
 }));
 
+vi.mock('../src/lib/email', () => ({
+  emailConfigured: vi.fn(() => true),
+  sendEmail: vi.fn(async () => true),
+}));
+
 import app from '../src/index';
 import { deliverWebhook } from '../src/lib/webhooks';
+import { sendEmail } from '../src/lib/email';
 import { createHostedAuthLink, getAccount } from '../src/lib/unipile';
 import { memoryKV } from './helpers';
 
@@ -144,6 +168,7 @@ function post(path: string, body: unknown, headers: Record<string, string>, env 
 
 beforeEach(() => {
   vi.mocked(deliverWebhook).mockClear();
+  vi.mocked(sendEmail).mockClear();
   vi.mocked(createHostedAuthLink).mockClear();
   vi.mocked(getAccount).mockReset();
   // Default: a origem confirma que a sessao caiu (status != OK).
@@ -221,6 +246,10 @@ describe('POST /hooks/account-status', () => {
     expect(db.tokens).toEqual([
       { tenant_id: 'tA', purpose: 'reconnect', status: 'pending' },
     ]);
+    // M5: o link vai para o usuario final do integrador, que nao tem sessao no
+    // nosso painel: sem redirect para o painel.
+    const corpo = vi.mocked(createHostedAuthLink).mock.calls[0]![1] as Record<string, unknown>;
+    expect(corpo).not.toHaveProperty('success_redirect_url');
   });
 
   it('sessao voltou: conta disconnected vira active e notifica (sem link)', async () => {
@@ -361,6 +390,63 @@ describe('POST /hooks/billing', () => {
     expect(res.status).toBe(200);
     expect(db.accounts[2]?.status).toBe('active');
     expect(db.billing[1]?.status).toBe('active');
+    // Despausa nao e primeira ativacao: sem e-mail de boas-vindas.
+    await new Promise((r) => setTimeout(r, 10));
+    expect(sendEmail).not.toHaveBeenCalled();
+  });
+
+  it('F2.20: pagamento confirmado manda UM e-mail de boas-vindas com link de uso unico', async () => {
+    db.tenants.tP = { webhook_url: null, webhook_secret: null, contact_email: 'p@example.com' };
+    db.billing.push({ tenant_id: 'tP', asaas_subscription_id: 'sub_P', status: 'pending' });
+
+    const primeira = await post(
+      '/hooks/billing',
+      { event: 'PAYMENT_RECEIVED', payment: { subscription: 'sub_P' } },
+      { 'asaas-access-token': ASAAS_TOKEN },
+    );
+    expect(primeira.status).toBe(200);
+    expect(db.billing.find((b) => b.tenant_id === 'tP')?.status).toBe('active');
+    await vi.waitFor(() => expect(sendEmail).toHaveBeenCalledTimes(1));
+    const msg = vi.mocked(sendEmail).mock.calls[0]![1];
+    expect(msg.to).toBe('p@example.com');
+    // O e-mail leva LINK (uso unico, troca por sessao), nunca a sessao em si.
+    expect(msg.text).toMatch(/painel\.html#t=lk_plink_[0-9a-f]{64}/);
+    expect(msg.text).not.toContain('lk_portal_');
+    expect(db.tenants.tP.welcome_sent_at).toBeTruthy();
+
+    // Evento em dobro do mesmo pagamento (ou retry): nao repete o e-mail.
+    await post(
+      '/hooks/billing',
+      { event: 'PAYMENT_CONFIRMED', payment: { subscription: 'sub_P' } },
+      { 'asaas-access-token': ASAAS_TOKEN },
+    );
+    await new Promise((r) => setTimeout(r, 10));
+    expect(sendEmail).toHaveBeenCalledTimes(1);
+  });
+
+  it('M1: envio que falha devolve a vez; o proximo pagamento confirmado tenta de novo', async () => {
+    db.tenants.tQ = { webhook_url: null, webhook_secret: null, contact_email: 'q@example.com' };
+    db.billing.push({ tenant_id: 'tQ', asaas_subscription_id: 'sub_Q', status: 'pending' });
+    vi.mocked(sendEmail).mockResolvedValueOnce(false);
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await post(
+      '/hooks/billing',
+      { event: 'PAYMENT_RECEIVED', payment: { subscription: 'sub_Q' } },
+      { 'asaas-access-token': ASAAS_TOKEN },
+    );
+    await vi.waitFor(() => expect(sendEmail).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(db.tenants.tQ?.welcome_sent_at).toBeNull());
+
+    await post(
+      '/hooks/billing',
+      { event: 'PAYMENT_CONFIRMED', payment: { subscription: 'sub_Q' } },
+      { 'asaas-access-token': ASAAS_TOKEN },
+    );
+    await vi.waitFor(() => expect(sendEmail).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(db.tenants.tQ?.welcome_sent_at).toBeTruthy());
+    expect(errSpy.mock.calls.map((c) => String(c[0]))).toContain('portal_welcome_email_failed');
+    errSpy.mockRestore();
   });
 
   it('assinatura desconhecida ou evento irrelevante: 200 ignored, sem efeito', async () => {

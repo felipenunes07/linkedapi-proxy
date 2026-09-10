@@ -35,6 +35,12 @@ export function cnpjValido(cnpj: string): boolean {
   return cnpj[12] === String(d1) && cnpj[13] === String(d2);
 }
 
+// Formato basico de e-mail (checkout e "entrar no painel"). Nao prova que a
+// caixa existe; so barra lixo antes de tocar banco ou API externa.
+export function emailValido(value: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(value);
+}
+
 export function documentoValido(documento: string): boolean {
   return documento.length === 11
     ? cpfValido(documento)

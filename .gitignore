@@ -25,3 +25,6 @@ coverage/
 .vitest/
 # Supabase CLI (pode conter refs/credenciais de pooler)
 supabase/.temp/
+
+# Preview local da landing (caminho absoluto desta maquina)
+.claude/launch.json

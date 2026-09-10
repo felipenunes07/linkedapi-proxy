@@ -1,11 +1,11 @@
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { Env, Variables } from '../types';
-import { supabaseSelect, supabaseInsert, supabaseUpdate } from '../lib/supabase';
-import { hashApiKey, secretsEqual } from '../lib/hash';
-import { randomHex32 } from '../lib/random';
+import { supabaseSelect, supabaseUpdate } from '../lib/supabase';
+import { secretsEqual } from '../lib/hash';
 import { asRecord, pickString } from '../lib/sanitize';
-import { createHostedAuthLink, getAccount } from '../lib/unipile';
+import { getAccount } from '../lib/unipile';
+import { createConnectLink, enviarBoasVindas } from '../lib/portal';
 import { deliverWebhook } from '../lib/webhooks';
 import { enableCustomerNotifications } from '../lib/asaas';
 import { fireAndForget } from '../lib/async';
@@ -131,48 +131,17 @@ async function notifyTenant(
 // Reconexao automatizada: gera um link de reconexao (mesmo desenho do
 // connect:reconnect do operador: token de uso unico, so hash no banco) para
 // incluir no evento ao tenant. Sem PUBLIC_BASE_URL configurada, retorna null e
-// o evento sai sem link (o operador gera na mao).
+// o evento sai sem link (o cliente reconecta pelo painel, ou o operador gera
+// na mao). O link expira em 2h; o painel gera outro quando precisar. Sem
+// voltarAoPainel: quem recebe este link e o usuario final do integrador, que
+// nao tem sessao no nosso painel (review M5).
 async function buildReconnectLink(
   env: Env,
   tenantId: string,
   unipileAccountId: string,
 ): Promise<string | null> {
-  const base = env.PUBLIC_BASE_URL?.replace(/\/+$/, '');
-  if (!base || !base.startsWith('https://')) {
-    return null;
-  }
-
-  // Mesmo TTL do fluxo do operador (Marco 4): 2h. Se o cliente vir o evento
-  // tarde e o link tiver expirado, o operador (ou um novo evento) gera outro.
-  const token = `lk_conn_${randomHex32()}`;
-  const expiresAtIso = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
-  await supabaseInsert(env, 'connect_tokens', {
-    tenant_id: tenantId,
-    token_hash: await hashApiKey(token),
-    purpose: 'reconnect',
-    status: 'pending',
-    expires_at: expiresAtIso,
-  });
-
-  const res = await createHostedAuthLink(env, {
-    type: 'reconnect',
-    reconnect_account: unipileAccountId,
-    api_url: `https://${env.UNIPILE_DSN}`,
-    expiresOn: expiresAtIso,
-    name: token,
-    notify_url: `${base}/hooks/connect`,
-    single_use: true,
-    disabled_features: [
-      'linkedin_recruiter',
-      'linkedin_sales_navigator',
-      'linkedin_organizations_mailboxes',
-    ],
-  });
-  if (!res.ok) {
-    return null;
-  }
-  const data = (await res.json()) as { url?: string };
-  return typeof data.url === 'string' ? data.url : null;
+  const link = await createConnectLink(env, tenantId, 'reconnect', unipileAccountId);
+  return link?.url ?? null;
 }
 
 // Status vindos da origem que significam "sessao caiu" / "sessao ok".
@@ -415,6 +384,14 @@ eventHooks.post('/billing', async (c) => {
         if (!ok) console.error('billing_enable_notifications_failed');
       });
     }
+
+    // F2.20/F2.21: boas-vindas com o link do painel (conectar o LinkedIn e
+    // gerar a chave). Roda em todo pagamento confirmado: enviarBoasVindas
+    // reivindica tenants.welcome_sent_at, entao sai uma vez so (mesmo com
+    // retry ou evento em dobro) e tenta de novo no proximo evento se o envio
+    // falhar. Sem e-mail configurado nada acontece: o link do painel ja ficou
+    // salvo no navegador de quem pagou pela tela do checkout.
+    fireAndForget(c, () => enviarBoasVindas(c.env, sub.tenant_id));
   }
 
   return c.json({ ok: true });

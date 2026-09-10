@@ -23,6 +23,9 @@
 
   // Variaveis NAO secretas podem ir em "vars". Segredos, nunca.
   "vars": {
-    "ENVIRONMENT": "development"
+    "ENVIRONMENT": "development",
+    // Pagina do painel do cliente na landing (F2.20). Trocar pelo dominio
+    // proprio quando linkedapi.com.br existir.
+    "PORTAL_URL": "https://linkedapi-site.pages.dev/painel.html"
   }
 }

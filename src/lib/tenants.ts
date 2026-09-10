@@ -34,10 +34,56 @@ interface ConnectedAccountRow {
   unipile_account_id: string;
 }
 
+// Resultado detalhado (F2.22): chave valida de tenant ativo SEM LinkedIn ativo
+// deixa de virar o mesmo 401 de chave invalida. O cliente fica sabendo o
+// motivo (pagamento em atraso, sessao caida, nunca conectou) em vez de achar
+// que a chave quebrou. Chave inexistente/revogada e tenant suspenso seguem
+// 401 identicos: para quem nao tem chave valida, nada muda.
+export type TenantResolution =
+  | { tenant: Tenant }
+  | { error: 'invalid_api_key'; status: 401 }
+  | { error: 'account_paused'; status: 402 }
+  | { error: 'account_disconnected' | 'linkedin_not_connected'; status: 409 };
+
+const CHAVE_INVALIDA = { error: 'invalid_api_key', status: 401 } as const;
+
+interface AccountStatusRow {
+  status: string;
+}
+
+// So roda para quem ja provou posse de chave valida de tenant ativo: o motivo
+// e da PROPRIA conta, nunca de outra. Pausa (billing) vence desconexao.
+async function motivoSemContaAtiva(
+  env: Env,
+  tenantId: string,
+): Promise<TenantResolution> {
+  const rows = await supabaseSelect<AccountStatusRow>(env, 'connected_accounts', {
+    tenant_id: `eq.${tenantId}`,
+    provider: 'eq.linkedin',
+    status: 'in.(paused,disconnected)',
+    select: 'status',
+  });
+  if (rows.some((r) => r.status === 'paused')) {
+    return { error: 'account_paused', status: 402 };
+  }
+  if (rows.some((r) => r.status === 'disconnected')) {
+    return { error: 'account_disconnected', status: 409 };
+  }
+  return { error: 'linkedin_not_connected', status: 409 };
+}
+
 export async function resolveTenant(
   env: Env,
   apiKey: string,
 ): Promise<Tenant | null> {
+  const resolved = await resolveTenantDetailed(env, apiKey);
+  return 'tenant' in resolved ? resolved.tenant : null;
+}
+
+export async function resolveTenantDetailed(
+  env: Env,
+  apiKey: string,
+): Promise<TenantResolution> {
   const keyHash = await hashApiKey(apiKey);
 
   // Chave -> tenant. Guardamos so o hash; comparamos por hash.
@@ -49,7 +95,7 @@ export async function resolveTenant(
   });
   const tenantId = keys[0]?.tenant_id;
   if (!tenantId) {
-    return null;
+    return CHAVE_INVALIDA;
   }
 
   // Tenant ativo? Uma chave valida de um tenant suspenso nao age. Suspender o
@@ -64,7 +110,7 @@ export async function resolveTenant(
   });
   const tenantRow = tenants[0];
   if (!tenantRow) {
-    return null;
+    return CHAVE_INVALIDA;
   }
 
   // Tenant -> account_id. Filtra por tenant_id no codigo (defesa em
@@ -86,17 +132,19 @@ export async function resolveTenant(
   );
   const unipileAccountId = accounts[0]?.unipile_account_id;
   if (!unipileAccountId) {
-    return null;
+    return motivoSemContaAtiva(env, tenantId);
   }
 
   return {
-    tenantId,
-    unipileAccountId,
-    limits: {
-      messages: tenantRow.daily_message_limit ?? DAILY_LIMITS.messages,
-      invitations: tenantRow.daily_invitation_limit ?? DAILY_LIMITS.invitations,
+    tenant: {
+      tenantId,
+      unipileAccountId,
+      limits: {
+        messages: tenantRow.daily_message_limit ?? DAILY_LIMITS.messages,
+        invitations: tenantRow.daily_invitation_limit ?? DAILY_LIMITS.invitations,
+      },
+      keyHash,
     },
-    keyHash,
   };
 }
 

@@ -50,6 +50,8 @@
           },
           "400": { "$ref": "#/components/responses/BadRequest" },
           "401": { "$ref": "#/components/responses/Unauthorized" },
+          "402": { "$ref": "#/components/responses/AccountPaused" },
+          "409": { "$ref": "#/components/responses/AccountNotReady" },
           "404": { "$ref": "#/components/responses/NotFound" },
           "429": { "$ref": "#/components/responses/RateLimited" },
           "502": { "$ref": "#/components/responses/UpstreamError" }
@@ -86,6 +88,8 @@
           },
           "400": { "$ref": "#/components/responses/BadRequest" },
           "401": { "$ref": "#/components/responses/Unauthorized" },
+          "402": { "$ref": "#/components/responses/AccountPaused" },
+          "409": { "$ref": "#/components/responses/AccountNotReady" },
           "404": { "$ref": "#/components/responses/NotFoundProfile" },
           "429": { "$ref": "#/components/responses/RateLimited" },
           "502": { "$ref": "#/components/responses/UpstreamError" }
@@ -140,6 +144,8 @@
             }
           },
           "401": { "$ref": "#/components/responses/Unauthorized" },
+          "402": { "$ref": "#/components/responses/AccountPaused" },
+          "409": { "$ref": "#/components/responses/AccountNotReady" },
           "502": { "$ref": "#/components/responses/UpstreamError" }
         }
       }
@@ -166,7 +172,9 @@
               }
             }
           },
-          "401": { "$ref": "#/components/responses/Unauthorized" }
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "402": { "$ref": "#/components/responses/AccountPaused" },
+          "409": { "$ref": "#/components/responses/AccountNotReady" }
         }
       }
     },
@@ -205,7 +213,9 @@
             }
           },
           "400": { "$ref": "#/components/responses/BadRequest" },
-          "401": { "$ref": "#/components/responses/Unauthorized" }
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "402": { "$ref": "#/components/responses/AccountPaused" },
+          "409": { "$ref": "#/components/responses/AccountNotReady" }
         }
       },
       "get": {
@@ -225,7 +235,9 @@
               }
             }
           },
-          "401": { "$ref": "#/components/responses/Unauthorized" }
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "402": { "$ref": "#/components/responses/AccountPaused" },
+          "409": { "$ref": "#/components/responses/AccountNotReady" }
         }
       },
       "delete": {
@@ -242,7 +254,9 @@
               }
             }
           },
-          "401": { "$ref": "#/components/responses/Unauthorized" }
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "402": { "$ref": "#/components/responses/AccountPaused" },
+          "409": { "$ref": "#/components/responses/AccountNotReady" }
         }
       }
     }
@@ -430,6 +444,10 @@
           "retry_after": {
             "type": "integer",
             "description": "Presente em erros 429: segundos ate a proxima janela (igual ao header Retry-After)."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Presente em alguns 429: `too_many_attempts` quando o teto de tentativas do dia (10x o limite, contando tambem as que falharam) foi atingido."
           }
         }
       }
@@ -459,8 +477,29 @@
           }
         }
       },
+      "AccountPaused": {
+        "description": "Sua conta esta pausada porque o pagamento da assinatura esta em atraso. Ela volta sozinha assim que o Pix for confirmado.",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/ErrorEnvelope" },
+            "example": { "error": "account_paused" }
+          }
+        }
+      },
+      "AccountNotReady": {
+        "description": "Sua chave e valida, mas nao ha LinkedIn ativo na conta: ou a sessao caiu (`account_disconnected`, reconecte pelo painel) ou nenhum LinkedIn foi conectado ainda (`linkedin_not_connected`).",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/ErrorEnvelope" },
+            "examples": {
+              "account_disconnected": { "value": { "error": "account_disconnected" } },
+              "linkedin_not_connected": { "value": { "error": "linkedin_not_connected" } }
+            }
+          }
+        }
+      },
       "RateLimited": {
-        "description": "Limite diario da acao atingido. Aguarde a virada da janela (header `Retry-After` traz os segundos restantes).",
+        "description": "Limite diario da acao atingido, ou teto de tentativas do dia (`reason: too_many_attempts`). Aguarde a virada da janela (header `Retry-After` traz os segundos restantes).",
         "headers": {
           "Retry-After": {
             "description": "Segundos ate a proxima janela.",

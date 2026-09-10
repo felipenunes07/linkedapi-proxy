@@ -40,6 +40,17 @@ PUBLIC_BASE_URL="https://cole-aqui-a-url-publica-do-worker"
 # Capacidade de seats do piso da conta-mestra (default 10).
 # SEAT_CAP="10"
 
+# Painel do cliente (F2.20). URL https da pagina do painel na landing (usada
+# pelo Worker nos e-mails e no redirect do wizard, e por npm run portal:link).
+# Em producao ja vem de "vars" no wrangler.jsonc.
+# PORTAL_URL="https://linkedapi-site.pages.dev/painel.html"
+
+# E-mail transacional via Resend (opcional). Sem os dois, nada e enviado e o
+# onboarding segue pelo link mostrado no checkout. EMAIL_FROM precisa ser de
+# um dominio verificado no Resend. Em producao: wrangler secret put.
+# RESEND_API_KEY=""
+# EMAIL_FROM="LinkedAPI <acesso@linkedapi.com.br>"
+
 # Rate limit via Upstash Redis (alternativa ao Cloudflare KV)
 # UPSTASH_REDIS_REST_URL=""
 # UPSTASH_REDIS_REST_TOKEN=""

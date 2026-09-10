@@ -6,7 +6,7 @@ item destravar, o roteiro executavel esta em [go-live.md](go-live.md). O
 recorte so das acoes que exigem mao humana (quem faz, como, o que destrava)
 esta em [../ACOES-HUMANAS.md](../ACOES-HUMANAS.md).
 
-Atualizado em 2026-08-20.
+Atualizado em 2026-09-10.
 
 ## Bloqueia tudo - RESOLVIDO (2026-09-01)
 
@@ -47,13 +47,28 @@ Atualizado em 2026-08-20.
 - [ ] Primeira assinatura real de cliente pagante (unico passo que falta para
       o dinheiro entrar; cobra de verdade).
 
+## Pix Automatico + painel do cliente (F2.18 a F2.21) - codigo pronto
+
+- [x] Checkout com Pix Automatico (F2.18) e painel self-service (F2.20),
+      endurecido pelo review (F2.21). 174 testes verdes.
+- [x] Landing reescrita so com o que o produto entrega (LinkedIn, 3 endpoints,
+      webhooks), sem logos de clientes, "teste gratis", SOC 2 ou 99,9%.
+- [x] Termos de uso e politica de privacidade redigidos (landing).
+- [ ] Aplicar migrations 0008 e 0009 em producao (bloqueado por permissao;
+      ver ACOES-HUMANAS 0.1).
+- [ ] Deploy do Worker e publicacao da landing (depois das migrations).
+- [ ] Confirmar Pix Automatico habilitado na conta Asaas de producao.
+- [ ] Resend (opcional): boas-vindas e "entrar" por e-mail.
+
 ## Negocio / juridico (acao do dono)
 
 - [ ] Registrar `linkedapi.com.br` e apontar o custom domain (trocar o server
       do `openapi.json`).
-- [ ] Termos de uso + politica de privacidade + LGPD (tokens e conteudo de
-      mensagens de terceiros; PRD reconhece a carga, nada redigido). Revisar
-      com advogado.
+- [ ] Termos de uso + politica de privacidade + LGPD: REDIGIDOS em
+      2026-09-10 (termos.html, privacidade.html na landing). Falta preencher
+      os dados da empresa (marcados em amarelo) e revisar com advogado,
+      incluindo o risco de marca do nome "LinkedAPI".
+- [ ] Criar a caixa `contato@linkedapi.com.br` (citada na landing e no painel).
 - [ ] Nota fiscal / regularizacao da cobranca recorrente em BRL.
 - [ ] Definir os tiers de plano de verdade (hoje: `basic` + override manual de
       limites por tenant).
@@ -66,20 +81,30 @@ Atualizado em 2026-08-20.
       concorrencia real; KV tem overshoot leve documentado.
 - [ ] Throttle/caching na autenticacao (3 selects por request; tentativas de
       chave invalida custam query).
-- [ ] Onboarding self-service completo (cadastro -> pagamento -> conexao ->
-      primeira chave) e painel do cliente/admin com UI.
-- [ ] Emissao da primeira chave sem operador (hoje `key:issue` e script).
+- [x] Onboarding self-service completo (cadastro -> pagamento -> conexao ->
+      primeira chave) e painel do cliente: FEITO no F2.20/F2.21. Painel de
+      admin com UI segue pendente (hoje: API /admin).
+- [x] Emissao da primeira chave sem operador: FEITO (`POST /portal/key`).
+- [ ] Link do "Entrar" preso ao navegador que pediu (nonce no localStorage,
+      hash junto do link, exigido no `/portal/session`). Hoje a mitigacao
+      contra "cliente manda o proprio link para uma vitima" sao as
+      confirmacoes do painel (review F2.24).
+- [ ] Limitar quantos checkouts pendentes seguram vaga (hoje: todos da
+      ultima 1h; abandono em massa deixa a venda "esgotada" por ate 1h).
+- [ ] Verificacao de posse do e-mail (`contact_email_verified_at`) antes de
+      liberar o "entrar" por e-mail. Hoje a mitigacao e mostrar o e-mail na
+      tela do Pix e deixar corrigir ate o 1o pagamento (review F2.20, I2).
 - [ ] Alertas/monitoramento (erro 5xx, conta desconectada, KV indisponivel,
       assinatura desconhecida no billing) e pagina de status.
 - [ ] Se a Unipile documentar assinatura/HMAC no notify da hosted auth, adotar.
 - [ ] Achados menores deferidos do security-review da fase 2: paginacao/count
       nas agregacoes de /admin (PostgREST corta em 1000 linhas em silencio);
-      distinguir 401 invalid_api_key de conta desconectada/pausada (responder
-      409 account_disconnected/account_paused reduz ticket de suporte); teto de
+      ~~distinguir 401 de conta desconectada/pausada~~ FEITO no F2.22
+      (402 account_paused, 409 account_disconnected/linkedin_not_connected); teto de
       chaves ativas por tenant na rotacao; mover webhook_url/secret para tabela
       propria (hoje em tenants; qualquer select:* futuro ali vazaria o secret).
 
-## Achado do review F2.13 (importante, nao bloqueia o 1o cliente)
+## Achado do review F2.13 - RESOLVIDO no F2.22 (teto de 10x o limite, contando falhas)
 
 - Teto de TENTATIVAS nas escritas: hoje so escrita ACEITA consome cota (M3.10,
   correto), mas tentativas que falham (400/404/502) nao contam em nada: uma

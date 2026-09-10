@@ -1,6 +1,6 @@
 # HANDOFF, LinkedAPI (proxy Unipile)
 
-Snapshot para quem for tocar o projeto de onde paramos. Atualizado em 2026-08-20.
+Snapshot para quem for tocar o projeto de onde paramos. Atualizado em 2026-09-10.
 
 > Leia primeiro [CLAUDE.md](CLAUDE.md) (contexto sempre-carregado e regras
 > invioláveis) e [PRD.md](PRD.md) (documento-mãe: porquê, o quê, decisões). Este
@@ -18,9 +18,9 @@ limit em Cloudflare KV, docs via Scalar a partir de OpenAPI.
 
 ## Status geral
 
-Todo o código da V1 **e da fase 2** está **pronto e verde**: typecheck +
-**100 testes** (14 arquivos), com os diffs revisados pelo subagent
-`security-reviewer`. O que falta é infraestrutura, contas externas e prova
+Todo o código da V1, da fase 2 **e do painel do cliente** está **pronto e
+verde**: typecheck + **174 testes** (16 arquivos), com os diffs revisados pelo
+subagent `security-reviewer`. O que falta é infraestrutura, contas externas e prova
 real: o projeto Supabase antigo sumiu do DNS, o Worker nunca foi deployado, e
 as provas ponta a ponta dependem disso. Lista viva do que está pendente:
 [docs/pendencias.md](docs/pendencias.md); o recorte só do que **exige mão
@@ -34,6 +34,7 @@ humana** (logins, contas, gente testando): [ACOES-HUMANAS.md](ACOES-HUMANAS.md).
 | Marco 5 | Docs (Scalar) + emissão/revogação de chave | ✅ **PROVADO no real em 2026-09-01** (local E workers.dev: emite -> 200 -> revoga -> 401) |
 | Marco 4 | Auto-conexão (hosted auth) | ✅ **mecanismo PASS em produção 2026-09-02** (callback + token + tenant + vínculo automático, âncora M4.11); prova com pessoa EXTERNA e teste não-dev: **DEFERRED, o 1º onboarding real é a evidência final** |
 | Fase 2 | Billing, webhooks, planos, reconexão, admin | ✅ **completa em 2026-09-03**: código, secrets, webhooks da Unipile, billing provado ponta a ponta no Asaas sandbox (pagar → ativa, atrasar → pausa, pagar → despausa) e **Asaas de produção configurado** (key real + webhook). Falta só a primeira assinatura real ([specs/fase-2.md](specs/fase-2.md)) |
+| F2.18-F2.23 | Pix Automático no checkout + **painel do cliente** (pagou → conecta o LinkedIn → gera a chave, sem operador) + landing honesta, termos e privacidade + teto de tentativas e erros 402/409 claros na API | ✅ código + testes + 3 passadas de security review (2026-09-10). ⏳ **Não está no ar**: falta aplicar as migrations 0008/0009 (bloqueado por permissão, ver [ACOES-HUMANAS.md](ACOES-HUMANAS.md) 0.1), deployar o Worker e publicar a landing ([docs/go-live.md](docs/go-live.md) seção H) |
 
 Provas reais executadas em 2026-09-01 (contra Supabase + Unipile + LinkedIn reais):
 - Marco 5 local e público: PASS (script `prova:chave`, tenant A / conta Márcio).
@@ -127,25 +128,28 @@ Os 3 endpoints do proxy: `POST /v1/messages`, `POST /v1/invitations`,
   - Scripts: `billing:subscribe`/`billing:status` (Asaas) e
     `webhook:register` (registra os hooks na origem).
 
-## O que falta (nada é código; tudo é infra + prova real)
+## O que falta (nada é código; tudo é permissão, infra, juridico e prova real)
 
-> Checklist executável, em ordem e com os comandos prontos:
-> [docs/go-live.md](docs/go-live.md). Os itens abaixo são o resumo.
+> Recorte do que exige mão humana: [ACOES-HUMANAS.md](ACOES-HUMANAS.md).
+> Checklist com os comandos: [docs/go-live.md](docs/go-live.md), seção H.
 
-1. **Banco novo (bloqueia tudo).** Restaurar ou criar projeto Supabase,
-   aplicar migrations 0001-0007 (bootstrap.sql), seedar 1 tenant e vincular uma conta real
-   (`connected_accounts` com um dos account_ids vivos da conta-mestra).
-2. **Deploy no workers.dev.** Roteiro abaixo. Preencher `PUBLIC_BASE_URL` no
-   `.dev.vars` com a URL resultante (o notify da auto-conexão precisa dela).
-3. **Prova real do Marco 5**: `key:issue` -> curl 200 -> `key:revoke` -> 401.
-4. **Prova real do Marco 4**: `connect:link` para um tenant de teste, alguém
-   de fora conecta o LinkedIn, conferir a linha em `connected_accounts`.
-   Aproveitar e reconectar a conta do Victor (`connect:reconnect`).
-5. **Isolamento cross-tenant no real**: com uma 2a conta real conectada,
-   repetir o teste central (chave A com chat_id real de B deve falhar).
-6. **Teste com pessoa real não-dev** usando só chave + `/docs` (promessa da V1).
-7. **Registrar `linkedapi.com.br`** e trocar o server do `openapi.json`
-   (placeholder) pela URL real.
+1. **Migrations 0008 e 0009 em produção (bloqueia a venda).** O modo de
+   permissão impediu o Claude de alterar o banco de produção; colar no SQL
+   Editor ou autorizar o CLI.
+2. **Deploy do Worker + publicação da landing**, nessa ordem e só depois do
+   item 1 (Worker novo sem a 0008 quebra o checkout).
+3. **Confirmar Pix Automático habilitado** na conta Asaas de produção.
+4. **Uma compra real ponta a ponta** (checkout → Pix → painel → wizard →
+   chave), com um CPF e um LinkedIn da equipe.
+5. **Dados da empresa + revisão jurídica** de termos.html e privacidade.html,
+   e a caixa `contato@linkedapi.com.br`.
+6. **Primeiro cliente real** = evidência final das provas DEFERRED (roteiro de
+   observação em [docs/runbook-primeiro-cliente.md](docs/runbook-primeiro-cliente.md)).
+7. **Registrar `linkedapi.com.br`**, Resend (opcional) e reconectar a conta do
+   Victor.
+
+Já resolvidos desde o snapshot anterior: banco restaurado, deploy no
+workers.dev, provas reais do Marco 5 e do isolamento cross-tenant.
 
 ## Setup local (para o colega rodar)
 
@@ -154,7 +158,7 @@ npm install
 cp .dev.vars.example .dev.vars   # preencha com credenciais reais (pedir ao Victor)
 npm run dev                      # Worker local em http://localhost:8787
 npm run typecheck                # tsc do Worker + dos scripts
-npm test                         # vitest (100 testes)
+npm test                         # vitest (174 testes)
 ```
 
 **Segredos NÃO estão no repositório** (regra inviolável #2). O `.dev.vars` é
@@ -228,6 +232,6 @@ Precisa do deploy (o notify da Unipile tem que alcançar o Worker público).
 | `scripts/` | Operador: chaves, tenants, conexão, billing, webhooks, deploy, prova |
 | `openapi.json` | Spec pública (proxy + self-service) |
 | `supabase/migrations/` | Schema 0001-0007 (`bootstrap.sql` = tudo em um) |
-| `test/` | 100 testes (destaques: `isolation`, `connect`, `eventHooks`) |
+| `test/` | 174 testes (destaques: `isolation`, `connect`, `eventHooks`, `portal`) |
 | `docs/` | Arquitetura, decisões, **pendências**, go-live, notas da Unipile |
 | `.claude/` | Agents, skills e hooks do projeto |

@@ -1,14 +1,15 @@
 import { Hono } from 'hono';
 import type { Env, Variables } from '../types';
-import { supabaseSelect, supabaseInsert, supabaseDelete } from '../lib/supabase';
+import { supabaseInsert, supabaseDelete } from '../lib/supabase';
 import { attemptKey, bumpAttempts } from '../lib/throttle';
 import { hashApiKey } from '../lib/hash';
-import { apenasDigitos, documentoValido } from '../lib/documento';
+import { apenasDigitos, documentoValido, emailValido } from '../lib/documento';
 import {
   createCustomer,
   createPixAutomaticAuthorization,
   cancelPixAutomaticAuthorization,
 } from '../lib/asaas';
+import { createPortalToken, seatsInUse } from '../lib/portal';
 
 // Checkout proprio (F2.14, reformulado em F2.18): o cliente assina sem sair da
 // nossa marca, pagando com PIX AUTOMATICO.
@@ -35,7 +36,9 @@ import {
 //   7. ORDEM: cliente (nao cobra) -> tenant -> autorizacao (cobra) -> vinculo.
 //      Se o vinculo falhar, a autorizacao e CANCELADA: cliente cobrado sem
 //      vinculo seria irrecuperavel pelo webhook.
-//   8. A resposta carrega SO o QR. Nunca tenant_id, ids do Asaas ou segredos.
+//   8. A resposta carrega SO o QR e o token do painel do PROPRIO comprador
+//      (F2.20: e com ele que o cliente conecta o LinkedIn e gera a chave,
+//      sem operador). Nunca tenant_id, ids do Asaas ou segredos nossos.
 
 const MAX_ATTEMPTS_PER_IP = 10;
 const MAX_ATTEMPTS_GLOBAL = 60;
@@ -43,20 +46,15 @@ const MAX_ATTEMPTS_PER_DOC = 3;
 const LOCK_TTL_SECONDS = 15 * 60;
 const DEFAULT_PRICE_BRL = 57;
 const DEFAULT_SEAT_CAP = 10;
+// Validade do QR do Pix Automatico (immediateQrCode.expirationSeconds em
+// lib/asaas.ts). Checkout pendente dentro dela ainda "segura" um seat.
+const PIX_VALIDADE_MS = 60 * 60 * 1000;
 
 const MAX_NAME = 100;
 const MAX_EMAIL = 150;
 
 interface TenantRow {
   id: string;
-}
-
-interface AccountRow {
-  id: string;
-}
-
-function validEmail(value: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(value);
 }
 
 export const checkout = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -97,9 +95,12 @@ checkout.post('/', async (c) => {
   if (typeof name !== 'string' || name.trim().length < 2 || name.length > MAX_NAME) {
     return c.json({ error: 'invalid_name' }, 400);
   }
-  if (typeof email !== 'string' || email.length > MAX_EMAIL || !validEmail(email)) {
+  if (typeof email !== 'string' || email.length > MAX_EMAIL || !emailValido(email.trim())) {
     return c.json({ error: 'invalid_email' }, 400);
   }
+  // Normalizado uma vez: o mesmo valor vai para o lock, o Asaas e o
+  // tenants.contact_email (onde o "entrar no painel" procura).
+  const emailNorm = email.trim().toLowerCase();
   if (typeof cpf_cnpj !== 'string') {
     return c.json({ error: 'invalid_document' }, 400);
   }
@@ -115,7 +116,7 @@ checkout.post('/', async (c) => {
     return c.json({ error: 'rate_limited' }, 429);
   }
 
-  const lockKey = `checkout:lock:${await hashApiKey(`${email.toLowerCase()}|${documento}`)}`;
+  const lockKey = `checkout:lock:${await hashApiKey(`${emailNorm}|${documento}`)}`;
   if (await kv.get(lockKey)) {
     return c.json({ error: 'checkout_in_progress' }, 409);
   }
@@ -128,15 +129,15 @@ checkout.post('/', async (c) => {
     return c.json({ error: 'internal_error' }, 500);
   }
 
-  // Camada 6: nao vender seat que a conta-mestra nao tem.
+  // Camada 6: nao vender seat que a conta-mestra nao tem. Conta quem ja tem
+  // conta (ativa, pausada ou desconectada) E quem pagou e ainda vai conectar
+  // (F2.21): senao o sold_out apareceria so depois do pagamento.
   const seatCap = Number(c.env.SEAT_CAP ?? DEFAULT_SEAT_CAP);
   try {
-    const ativas = await supabaseSelect<AccountRow>(c.env, 'connected_accounts', {
-      status: 'eq.active',
-      provider: 'eq.linkedin',
-      select: 'id',
+    const ocupados = await seatsInUse(c.env, {
+      pendentesDesde: new Date(Date.now() - PIX_VALIDADE_MS).toISOString(),
     });
-    if (Number.isFinite(seatCap) && ativas.length >= seatCap) {
+    if (Number.isFinite(seatCap) && ocupados >= seatCap) {
       console.error('checkout_sold_out');
       await liberarLock();
       return c.json({ error: 'sold_out' }, 503);
@@ -153,7 +154,7 @@ checkout.post('/', async (c) => {
   try {
     customerId = await createCustomer(c.env, {
       name: name.trim(),
-      email,
+      email: emailNorm,
       cpfCnpj: documento,
       externalReference: 'checkout',
       // Notificacao do Asaas desligada ate o primeiro pagamento: senao
@@ -178,6 +179,7 @@ checkout.post('/', async (c) => {
     const rows = await supabaseInsert<TenantRow>(c.env, 'tenants', {
       name: name.trim(),
       status: 'active',
+      contact_email: emailNorm,
     });
     const created = rows[0];
     if (!created?.id) {
@@ -242,5 +244,22 @@ checkout.post('/', async (c) => {
     return c.json({ error: 'billing_unavailable' }, 502);
   }
 
-  return c.json({ ok: true, data: { value: price, method: 'pix_automatic', pix: qr } });
+  // Passo 5 (F2.20): token do painel do comprador. A tela do checkout usa para
+  // acompanhar o pagamento e abrir o painel (conectar LinkedIn, gerar chave).
+  // Falha aqui NAO desfaz a venda: a cobranca ja esta vinculada e o link do
+  // painel tambem sai no e-mail de boas-vindas (ou pelo portal:link).
+  let portal: { token: string; expires_at: string } | null = null;
+  try {
+    const criado = await createPortalToken(c.env, tenantId);
+    portal = { token: criado.token, expires_at: criado.expiresAt };
+  } catch {
+    console.error('checkout_portal_token_failed');
+  }
+
+  // Resposta carrega credencial (token do painel): nunca cachear.
+  c.header('Cache-Control', 'no-store');
+  return c.json({
+    ok: true,
+    data: { value: price, method: 'pix_automatic', pix: qr, portal },
+  });
 });

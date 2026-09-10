@@ -116,6 +116,53 @@ npm run prova:chave -- <tenant_id>
       "<nome>" <cpf_cnpj> <email>`. ATENCAO: cobra de verdade.
 - [ ] Conferir a operacao: `curl -H "X-ADMIN-KEY: ..." <url>/admin/capacity`.
 
+## H. Pix Automatico + painel do cliente (F2.18 a F2.21)
+
+Codigo pronto e testado (174 testes). O Worker em producao ainda e o deploy de
+2026-09-03 17:57, ANTERIOR ao F2.18: nao deployar antes das migrations, senao
+todo checkout cria a autorizacao no Asaas e cancela em seguida.
+
+- [ ] [VOCE] Aplicar as migrations 0008 e 0009 no Supabase. Pelo SQL Editor
+      (colar `supabase/migrations/0008_pix_automatico.sql` e depois
+      `0009_portal.sql`) ou pelo CLI ja logado nesta maquina:
+
+```bash
+supabase db query --linked --project-ref voojvcdihyymewrhrlti -f supabase/migrations/0008_pix_automatico.sql
+```
+
+```bash
+supabase db query --linked --project-ref voojvcdihyymewrhrlti -f supabase/migrations/0009_portal.sql
+```
+
+- [ ] Deploy do Worker (depois das migrations):
+
+```bash
+npm run deploy
+```
+
+- [ ] Publicar a landing (repo `linkedapi-site`, projeto Pages `linkedapi-site`
+      na conta do Victor):
+
+```bash
+bash publicar.sh
+```
+
+- [ ] Smoke (so leitura, nada e criado): `GET /portal/status` sem token =
+      401; preflight do painel = 204; `/checkout` com CPF invalido = 400;
+      chave inexistente = 401:
+
+```bash
+npm run smoke
+```
+- [ ] [VOCE] Confirmar no painel do Asaas de producao que o Pix Automatico
+      esta habilitado na conta (sem isso o checkout responde
+      `billing_unavailable`).
+- [ ] [VOCE] Opcional: e-mail transacional. Conta no Resend, dominio
+      verificado, e `npx wrangler secret put RESEND_API_KEY` +
+      `npx wrangler secret put EMAIL_FROM`. Sem isso o painel funciona pela
+      sessao salva no navegador de quem pagou; plano B do operador:
+      `npm run portal:link -- <tenant_id>`.
+
 ## G. Acabamento
 
 - [ ] [VOCE] Registrar `linkedapi.com.br` e apontar o custom domain no

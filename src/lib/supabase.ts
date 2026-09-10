@@ -86,6 +86,32 @@ export async function supabaseRpc(
   }
 }
 
+// RPC que devolve linhas. Usada quando o argumento e dado pessoal (ex.: busca
+// por e-mail do painel): no corpo da chamada ele nao vai para o query string
+// nem para os logs de API. Mesma disciplina de segredo/erro.
+export async function supabaseRpcSelect<T>(
+  env: Env,
+  fn: string,
+  args: Record<string, unknown>,
+): Promise<T[]> {
+  const res = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/${fn}`, {
+    method: 'POST',
+    headers: {
+      apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+      authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      'content-type': 'application/json',
+      accept: 'application/json',
+    },
+    body: JSON.stringify(args),
+  });
+
+  if (!res.ok) {
+    throw new Error(`supabase_rpc_failed:${res.status}`);
+  }
+
+  return (await res.json()) as T[];
+}
+
 // DELETE com filtros PostgREST. Uso restrito a limpeza de registro que acabou
 // de ser criado e nao chegou a valer (ex.: tenant de um checkout cujo cartao
 // foi recusado). Regra do PRD: nada que ja teve vida util e deletado; para

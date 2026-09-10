@@ -132,6 +132,33 @@ describe('rate limit (Marco 3)', () => {
     expect((await invite(env, KEY)).status).toBe(200);
   });
 
+  it('F2.22: tentativas que falham nao gastam cota, mas tem teto (10x o limite)', async () => {
+    const env = baseEnv();
+    const limit = DAILY_LIMITS.invitations;
+    // A origem recusa tudo: nenhuma escrita e aceita, a cota fica intacta...
+    vi.mocked(sendInvitation).mockImplementation(
+      async () => new Response('{}', { status: 500 }),
+    );
+    for (let i = 0; i < limit * 10; i++) {
+      expect((await invite(env, KEY)).status).toBe(502);
+    }
+    // ...mas quem martela a origem e cortado antes de chamar de novo.
+    const res = await invite(env, KEY);
+    expect(res.status).toBe(429);
+    expect(await res.json()).toMatchObject({ error: 'rate_limited', reason: 'too_many_attempts' });
+    expect(res.headers.get('Retry-After')).toBeTruthy();
+    expect(sendInvitation).toHaveBeenCalledTimes(limit * 10);
+    // Outro tenant segue livre.
+    vi.mocked(sendInvitation).mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ object: 'InvitationSent' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+    );
+    expect((await invite(env, KEY_2)).status).toBe(200);
+  }, 60_000);
+
   it('sem binding de KV, recusa a escrita com 500 (nao segue sem protecao)', async () => {
     const env = { ...baseEnv(), RATE_LIMIT: undefined } as unknown as Env;
     const res = await invite(env, KEY);

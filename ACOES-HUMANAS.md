@@ -1,114 +1,106 @@
 # Acoes humanas (o que SO uma pessoa pode fazer para o projeto avancar)
 
-Todo o codigo esta pronto e testado (100 testes verdes). Este arquivo lista
-APENAS o que precisa de mao humana: logins, contas externas, dinheiro,
-assinatura de contrato e gente de verdade testando. Cada item diz quem faz,
-como faz e o que destrava. O restante (comandos, seeds, provas automatizadas)
-esta em [docs/go-live.md](docs/go-live.md) e ja e executavel.
+Todo o codigo esta pronto e testado (174 testes verdes, review de seguranca
+sem bloqueante). Este arquivo lista APENAS o que precisa de mao humana:
+permissao em producao, contas externas, dados da empresa, juridico e gente de
+verdade testando. Os comandos estao em [docs/go-live.md](docs/go-live.md).
 
-Atualizado em 2026-08-20.
+Atualizado em 2026-09-10.
 
 ---
 
-## 1. Victor (dono da infra) - BLOQUEIA TUDO
+## 0. Destravar a venda (cerca de 15 minutos) - BLOQUEIA TUDO
 
-### 1.1 Restaurar o banco Supabase
-O projeto `voojvcdihyymewrhrlti` (sa-east-1) sumiu do DNS (pausado por
-inatividade ou deletado). Sem banco, nenhuma prova real roda.
+Hoje o que esta no ar esta dessincronizado: o Worker e o deploy de 03/09
+(anterior ao Pix Automatico), a landing publicada e a versao antiga com
+formulario de cartao, e o banco nao tem as colunas novas.
 
-- Entrar em https://supabase.com/dashboard com a conta do Victor.
-- Se o projeto aparecer pausado: **Restore project**.
-- Se nao der para restaurar: criar projeto novo, regiao `sa-east-1`.
-- Colar o conteudo de [supabase/bootstrap.sql](supabase/bootstrap.sql) no
-  **SQL Editor** e executar (uma vez so; e idempotente).
-- Copiar e enviar para quem opera: **Project URL** e **service_role key**
-  (Settings > API). Elas entram no `.dev.vars` local (nunca no git).
+### 0.1 Aplicar as migrations 0008 e 0009 no Supabase
+O modo de permissao do Claude bloqueou alteracao no banco de producao. Duas
+opcoes:
+- colar no SQL Editor do projeto `voojvcdihyymewrhrlti`, nesta ordem,
+  [0008_pix_automatico.sql](supabase/migrations/0008_pix_automatico.sql) e
+  [0009_portal.sql](supabase/migrations/0009_portal.sql) (as duas sao
+  idempotentes: rodar de novo nao estraga nada); ou
+- autorizar o Claude a rodar pelo Supabase CLI ja logado nesta maquina
+  (comandos em go-live.md, secao H).
 
-**Destrava:** prova real da chave (Marco 5), seeds de tenant, tudo do banco.
+**Destrava:** o deploy do Worker. ATENCAO: deployar antes disto quebra o
+checkout (a autorizacao do Pix e criada e cancelada em seguida).
 
-### 1.2 Login na Cloudflare para o deploy - FEITO em 2026-09-01
-Felipe logou via OAuth (tem acesso a conta do Victor) e o Worker foi publicado:
-`https://linkedapi-proxy.victor-58a.workers.dev` (`/health` ok, `/docs` no ar,
-KV + secrets configurados). Nada mais a fazer aqui.
+### 0.2 Deploy do Worker e publicacao da landing
+Depois de 0.1: `npm run deploy` neste repo e `bash publicar.sh` no repo da
+landing. O Claude faz os dois se autorizado.
 
-### 1.3 Registrar o dominio
+### 0.3 Confirmar que o Pix Automatico esta habilitado no Asaas de producao
+Nao deu para consultar pela API (permissao). Confira no painel do Asaas se a
+conta tem Pix Automatico ativo e uma chave Pix cadastrada. Sem isso o checkout
+responde "o sistema de pagamento nao respondeu".
+
+### 0.4 Uma compra de verdade, sua
+Assine pela landing com o seu CPF (R$ 57), pague o QR, conecte um LinkedIn
+seu pelo painel e gere a chave. E a unica prova ponta a ponta do fluxo novo
+(checkout -> Pix -> webhook -> painel -> wizard -> chave). Depois cancele a
+autorizacao no app do banco se quiser.
+
+---
+
+## 1. Empresa e juridico (antes de mandar trafego pago)
+
+- **Dados da empresa** em [termos.html] e [privacidade.html] no repo da
+  landing: razao social, CNPJ, endereco, cidade do foro e nome do encarregado
+  (DPO). Estao marcados em amarelo na pagina.
+- **Revisao por advogado** dos termos e da politica (rascunhos completos,
+  escritos para a LGPD e o CDC, mas nao revisados). Incluir na consulta o
+  nome **"LinkedAPI"**: usa "Linked", e LinkedIn e marca registrada; ha risco
+  de notificacao. Os textos ja dizem que a LinkedAPI nao e afiliada ao
+  LinkedIn.
+- **Caixa `contato@linkedapi.com.br`**: citada na landing, no painel e nos
+  termos. Depende do dominio (item 2). Se preferir outro endereco, troque nos
+  4 arquivos da landing.
+- **Nota fiscal** da cobranca recorrente em BRL.
+
+## 2. Dominio
+
 - Registrar `linkedapi.com.br` (registro.br) e apontar como custom domain do
-  Worker no painel da Cloudflare. Sem pressa: a URL `*.workers.dev` cobre o
-  interim. Depois, trocar o `server` do [openapi.json](openapi.json).
+  Pages (site) e do Worker (API). O CORS ja aceita `linkedapi.com.br` e
+  `www.linkedapi.com.br`.
+- Depois: trocar `PORTAL_URL` no `wrangler.jsonc`, a URL do Worker em
+  `js/main.js`, `js/painel.js`, `_headers` e nos links da landing, e o
+  `server` do `openapi.json`.
 
-**Destrava:** marca propria na URL (hoje o placeholder da doc aponta para um
-dominio que nao existe).
+## 3. E-mail transacional (opcional, recomendado)
 
----
+Conta no Resend, dominio verificado, e no Worker:
+`npx wrangler secret put RESEND_API_KEY` e `npx wrangler secret put EMAIL_FROM`.
 
-## 2. Operador (Felipe ou Victor) - contas e segredos externos
+**Destrava:** e-mail de boas-vindas com o link do painel e o "entrar no
+painel" por e-mail. Sem isso o cliente entra pela sessao salva no navegador
+em que pagou; se perder, o operador gera um link com
+`npm run portal:link -- <tenant_id>`.
 
-### 2.1 Conta no Asaas (billing)
-O codigo de cobranca esta pronto; falta a conta.
+## 4. Gente de verdade (continua valendo)
 
-- Criar/usar a conta Asaas da empresa (https://www.asaas.com).
-- Gerar a **API key** (colocar em `ASAAS_API_KEY` no `.dev.vars`).
-- No painel do Asaas, configurar o webhook de cobranca apontando para
-  `https://<url-do-worker>/hooks/billing`, com um token forte no header
-  `asaas-access-token` (o MESMO valor vai em `ASAAS_HOOK_TOKEN` no Worker).
-- Validar primeiro no sandbox (`ASAAS_BASE_URL=https://api-sandbox.asaas.com/v3`).
+- **Primeiro cliente real**: agora o onboarding e self-service, entao o
+  primeiro cliente e a prova final das duas provas DEFERRED (pessoa externa
+  conecta sozinha; pessoa nao-dev usa so chave + `/docs`). Roteiro de
+  observacao em [docs/runbook-primeiro-cliente.md](docs/runbook-primeiro-cliente.md).
+- **Reconectar a conta do Victor** (status CREDENTIALS na conta-mestra).
+- **Dominio proprio na hosted auth** (config na Unipile): o wizard ainda
+  mostra `account.unipile.com` na URL.
 
-**Destrava:** cobrar de verdade: `npm run billing:subscribe` cria a assinatura
-Pix; atraso pausa o cliente sozinho, pagamento despausa.
+## 5. Negocio
 
-### 2.2 Gerar e subir os secrets da fase 2 - FEITO em 2026-09-01
-Os 4 secrets (`ACCOUNT_STATUS_HOOK_SECRET`, `MESSAGE_HOOK_SECRET`,
-`ASAAS_HOOK_TOKEN`, `ADMIN_API_KEY`) foram gerados, gravados no `.dev.vars` e
-subidos em producao, junto com `PUBLIC_BASE_URL`. O webhook `account-status` ja
-foi registrado na Unipile (id `0Az3LTd7R4ejVAX_7vE_4g`). O webhook `messaging`
-fica para DEPOIS do banco voltar (mensagens chegam o tempo todo e falhariam
-contra um banco morto): `npm run webhook:register -- messaging`.
-
----
-
-## 3. Gente de verdade (as provas que nao tem como automatizar)
-
-### 3.1 Alguem de fora conectar o proprio LinkedIn
-E o criterio de aceite do Marco 4: o operador roda `npm run connect:link`,
-envia o link, e uma pessoa que NAO e da equipe conclui o wizard sozinha, sem
-nunca ver a palavra Unipile. Conferir depois com `npm run tenant:list`.
-
-**Tambem aproveitar para:** reconectar a conta do proprio Victor (esta com a
-sessao caida na conta-mestra, status CREDENTIALS).
-
-### 3.2 Uma pessoa nao-dev usar a API so com chave + doc
-E a promessa literal da V1 (PRD secao 6): entregar a chave `lk_live_` e o link
-do `/docs` e observar a pessoa enviar mensagem e convite sem ajuda verbal.
-Onde ela travar, e ali que a doc precisa melhorar.
-
-### 3.3 Uma segunda conta LinkedIn real para a prova de isolamento
-A alegacao central do produto (chave A nunca age pela conta B) so esta provada
-em testes com mocks. Precisa de 2 tenants com contas REAIS: rodar chave A com
-um `chat_id` real do tenant B e confirmar que falha.
-
----
-
-## 4. Negocio e juridico (decisao do dono)
-
-- **Termos de uso + politica de privacidade + LGPD**: nada foi redigido. O
-  produto guarda tokens de sessao e repassa conteudo de mensagens de
-  terceiros; revisar com advogado antes de cliente pagante.
-- **Nota fiscal / regularizacao** da cobranca recorrente em BRL (R$57/mes).
-- **Definir os tiers de plano**: hoje existe `basic` + override manual de
-  limites por tenant (teto seguro 150 msgs / 100 convites por dia). Decidir se
-  havera plano maior e a que preco.
-- **Abrir o pull request**: os commits estao locais; empurrar e revisar:
-
-```bash
-git checkout -b feat/marco4-fase2 && git push -u origin feat/marco4-fase2
-```
+- Definir os tiers de plano (hoje `basic` + override manual de limites).
+- Revisar e fazer o merge do PR ja aberto:
+  [vzbaggio/linkedapi-proxy#1](https://github.com/vzbaggio/linkedapi-proxy/pull/1)
+  (branch `feat/marco4-fase2` do fork; cada push atualiza o PR).
 
 ---
 
 ## Ordem sugerida
 
-1.1 banco -> 1.2 wrangler -> (go-live secoes A-E rodam em comandos) ->
-2.2 secrets -> 2.1 Asaas -> 3.1/3.2/3.3 provas com gente -> 1.3 dominio -> 4.
+0.1 -> 0.2 -> 0.3 -> 0.4 -> 1 -> 2 -> 3 -> 4 -> 5.
 
-Feito isso, o que sobra esta em [docs/pendencias.md](docs/pendencias.md)
+O que sobra depois disso esta em [docs/pendencias.md](docs/pendencias.md)
 (divida tecnica consciente que nao bloqueia os primeiros clientes).
