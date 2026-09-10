@@ -13,7 +13,7 @@ Atualizado em 2026-09-10.
 
 0.1 e 0.2 FEITOS em 2026-09-10 (go-live autorizado pelo Felipe): migrations
 0008/0009 aplicadas e conferidas, Worker `291a684e`, landing `721dd6e6`,
-smoke 7/7. Restam 0.3, 0.4 e o push (0.5).
+smoke 7/7, e o push (0.5). Restam 0.3 e 0.4.
 
 ### 0.1 ~~Aplicar as migrations 0008 e 0009 no Supabase~~ FEITO
 O modo de permissao do Claude bloqueou alteracao no banco de producao. Duas
@@ -32,10 +32,11 @@ checkout (a autorizacao do Pix e criada e cancelada em seguida).
 Depois de 0.1: `npm run deploy` neste repo e `bash publicar.sh` no repo da
 landing. O Claude faz os dois se autorizado.
 
-### 0.3 Confirmar que o Pix Automatico esta habilitado no Asaas de producao
-Nao deu para consultar pela API (permissao). Confira no painel do Asaas se a
-conta tem Pix Automatico ativo e uma chave Pix cadastrada. Sem isso o checkout
-responde "o sistema de pagamento nao respondeu".
+### 0.3 ~~Confirmar que o Pix Automatico esta habilitado no Asaas~~ FEITO
+Conferido pela API em 2026-09-10: `GET /pix/automatic/authorizations` em
+producao responde 200 (funcionalidade ativa na conta). As 2 autorizacoes que
+ja existiam la sao testes do desenvolvimento do F2.18 (contratos `TESTE-...`),
+ambas `CANCELLED`: nada cobrando, nada a fazer.
 
 ### 0.4 Uma compra de verdade, sua
 Assine pela landing com o seu CPF (R$ 57), pague o QR, conecte um LinkedIn
@@ -43,11 +44,10 @@ seu pelo painel e gere a chave. E a unica prova ponta a ponta do fluxo novo
 (checkout -> Pix -> webhook -> painel -> wizard -> chave). Depois cancele a
 autorizacao no app do banco se quiser.
 
-### 0.5 Push dos commits para o GitHub
-O git desta maquina esta logado como `BaseCoatMarketing`, sem acesso aos
-repos `felipenunes07` (403 / not found). Rode `gh auth login` com a conta
-certa; depois `git push fork feat/marco4-fase2` (API, atualiza o PR #1) e
-`git push origin master` (landing).
+### 0.5 ~~Push dos commits para o GitHub~~ FEITO
+Feito em 2026-09-10 com a conta `felipenunes07` do GitHub CLI (a conta ativa
+da maquina e `BaseCoatMarketing`, sem acesso a esses repos; o push usou a
+credencial certa so no comando, sem trocar a conta ativa).
 
 ---
 

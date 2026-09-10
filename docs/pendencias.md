@@ -56,8 +56,8 @@ Atualizado em 2026-09-10.
 - [x] Termos de uso e politica de privacidade redigidos (landing).
 - [x] Migrations 0008 e 0009 em producao (2026-09-10, conferidas).
 - [x] Deploy do Worker (`291a684e`) e landing publicada (`721dd6e6`), smoke 7/7.
-- [ ] Push dos commits (git local logado em outra conta do GitHub).
-- [ ] Confirmar Pix Automatico habilitado na conta Asaas de producao.
+- [x] Push dos commits (2026-09-10, conta felipenunes07; PR #1 atualizado).
+- [x] Pix Automatico habilitado na conta Asaas de producao (API 200, 2026-09-10).
 - [ ] Resend (opcional): boas-vindas e "entrar" por e-mail.
 
 ## Negocio / juridico (acao do dono)

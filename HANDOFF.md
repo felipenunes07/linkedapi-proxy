@@ -135,8 +135,9 @@ Os 3 endpoints do proxy: `POST /v1/messages`, `POST /v1/invitations`,
 
 1. ~~Migrations 0008/0009, deploy do Worker e publicação da landing~~ FEITO
    em 2026-09-10 (smoke 7/7).
-2. **Push dos commits** para o GitHub: o git desta máquina está logado como
-   `BaseCoatMarketing`, sem acesso aos repos `felipenunes07` (`gh auth login`).
+2. ~~Push dos commits~~ FEITO em 2026-09-10 (PR
+   [vzbaggio/linkedapi-proxy#1](https://github.com/vzbaggio/linkedapi-proxy/pull/1)
+   atualizado; landing em `felipenunes07/linkedapi-site`).
 3. **Confirmar Pix Automático habilitado** na conta Asaas de produção.
 4. **Uma compra real ponta a ponta** (checkout → Pix → painel → wizard →
    chave), com um CPF e um LinkedIn da equipe.
