@@ -50,6 +50,12 @@ vi.mock('../src/lib/asaas', () => ({
     },
   })),
   cancelPixAutomaticAuthorization: vi.fn(async () => true),
+  createCardCheckout: vi.fn(async () => ({
+    checkoutId: 'chk_123',
+    url: 'https://asaas.com/checkoutSession/show?id=chk_123',
+  })),
+  cancelCardCheckout: vi.fn(async () => true),
+  cardCheckoutStatus: vi.fn(async () => 'ACTIVE'),
 }));
 
 import app from '../src/index';
@@ -57,6 +63,9 @@ import {
   createCustomer,
   createPixAutomaticAuthorization,
   cancelPixAutomaticAuthorization,
+  createCardCheckout,
+  cancelCardCheckout,
+  cardCheckoutStatus,
 } from '../src/lib/asaas';
 import { supabaseInsert, supabaseDelete } from '../src/lib/supabase';
 
@@ -260,6 +269,103 @@ describe('POST /checkout, caminho feliz e ordem', () => {
       cpfCnpj: '52998224725',
       notificationsEnabled: false,
     });
+  });
+});
+
+describe('POST /checkout, cartao recorrente no checkout hospedado (F2.25)', () => {
+  const envCartao = () => baseEnv({ PORTAL_URL: 'https://site.example/painel' } as Partial<Env>);
+
+  it('cria sessao hospedada (sem cliente pre-criado) e devolve so a URL do Asaas', async () => {
+    const res = await post({ ...BODY_OK, payment_method: 'card' }, envCartao());
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Cache-Control')).toBe('no-store');
+    const text = await res.text();
+    const body = JSON.parse(text);
+    expect(body.data).toMatchObject({
+      method: 'card',
+      checkout_url: 'https://asaas.com/checkoutSession/show?id=chk_123',
+      portal: { token: expect.stringMatching(/^lk_portal_[0-9a-f]{64}$/) },
+    });
+    // Nenhum dado de cartao passa por aqui; nem QR de Pix.
+    expect(body.data).not.toHaveProperty('pix');
+    expect(createPixAutomaticAuthorization).not.toHaveBeenCalled();
+    expect(text).not.toContain(TENANT_ID);
+    expect(text).not.toContain('cus_123');
+
+    const args = vi.mocked(createCardCheckout).mock.calls[0]![1];
+    expect(args).toMatchObject({
+      value: 57,
+      externalReference: TENANT_ID,
+      successUrl: 'https://site.example/painel?pagamento=cartao',
+      cancelUrl: 'https://site.example/#assinar',
+    });
+    expect(args).not.toHaveProperty('customerId');
+    // O Asaas nao aceita cliente pre-criado no checkout: nao criamos um.
+    expect(createCustomer).not.toHaveBeenCalled();
+    const vinculo = inserted.find((i) => i.table === 'billing_subscriptions')!;
+    expect(vinculo.row).toMatchObject({
+      tenant_id: TENANT_ID,
+      asaas_customer_id: null,
+      asaas_checkout_id: 'chk_123',
+      payment_method: 'card',
+      status: 'pending',
+    });
+  });
+
+  it('I1: nova tentativa com os mesmos dados REUSA a sessao ativa (sem 2a cobranca)', async () => {
+    const env = envCartao();
+    const primeira = await post({ ...BODY_OK, payment_method: 'card' }, env);
+    expect(primeira.status).toBe(200);
+    const segunda = await post({ ...BODY_OK, payment_method: 'card' }, env);
+    expect(segunda.status).toBe(200);
+    const body = (await segunda.json()) as { data: Record<string, unknown> };
+    expect(body.data).toMatchObject({
+      method: 'card',
+      checkout_url: 'https://asaas.com/checkoutSession/show?id=chk_123',
+      reused: true,
+      portal: null,
+    });
+    expect(createCardCheckout).toHaveBeenCalledTimes(1);
+    expect(cardCheckoutStatus).toHaveBeenCalledWith(expect.anything(), 'chk_123');
+  });
+
+  it('I1: sessao anterior cancelada no Asaas -> cria outra; paga/indefinida -> 409', async () => {
+    const env = envCartao();
+    await post({ ...BODY_OK, payment_method: 'card' }, env);
+    vi.mocked(cardCheckoutStatus).mockResolvedValueOnce('CANCELED');
+    const nova = await post({ ...BODY_OK, payment_method: 'card' }, env);
+    expect(nova.status).toBe(200);
+    expect(createCardCheckout).toHaveBeenCalledTimes(2);
+
+    vi.mocked(cardCheckoutStatus).mockResolvedValueOnce('PAID');
+    const paga = await post({ ...BODY_OK, payment_method: 'card' }, env);
+    expect(paga.status).toBe(409);
+    vi.mocked(cardCheckoutStatus).mockResolvedValueOnce(null);
+    const indefinida = await post({ ...BODY_OK, payment_method: 'card' }, env);
+    expect(indefinida.status).toBe(409);
+    expect(createCardCheckout).toHaveBeenCalledTimes(2);
+  });
+
+  it('falha ao gravar o vinculo CANCELA a sessao de cartao antes que alguem pague', async () => {
+    vi.mocked(supabaseInsert).mockImplementationOnce(async () => [{ id: TENANT_ID }]);
+    vi.mocked(supabaseInsert).mockRejectedValueOnce(new Error('supabase_insert_failed:500'));
+    const res = await post({ ...BODY_OK, payment_method: 'card' }, envCartao());
+    expect(res.status).toBe(502);
+    expect(cancelCardCheckout).toHaveBeenCalledWith(expect.anything(), 'chk_123');
+  });
+
+  it('Asaas recusou a sessao: 502, tenant orfao removido, nada cobrado', async () => {
+    vi.mocked(createCardCheckout).mockRejectedValueOnce(new Error('asaas_card_checkout_failed:400'));
+    const res = await post({ ...BODY_OK, payment_method: 'card' }, envCartao());
+    expect(res.status).toBe(502);
+    expect(supabaseDelete).toHaveBeenCalled();
+  });
+
+  it('metodo desconhecido e recusado antes de tocar em qualquer coisa', async () => {
+    const res = await post({ ...BODY_OK, payment_method: 'boleto' }, envCartao());
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid_payment_method' });
+    expect(createCustomer).not.toHaveBeenCalled();
   });
 });
 

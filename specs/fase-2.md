@@ -135,8 +135,23 @@ E-mail (Resend) e opcional: `RESEND_API_KEY` + `EMAIL_FROM`. Com ele, o
 ele, o acesso fica na sessao salva no navegador de quem pagou, e o operador
 tem `npm run portal:link -- <tenant_id>` como plano B.
 
+### 9. Cartao recorrente e landing na Vercel (F2.25/F2.26, migration 0010)
+
+- `POST /checkout` aceita `payment_method`: `pix_automatic` (padrao, QR na
+  tela) ou `card`. No cartao o Worker cria o tenant e uma sessao de checkout
+  hospedado do Asaas (`CREDIT_CARD` + `RECURRENT`, 60 min) e devolve
+  `checkout_url`; o navegador vai para a pagina do Asaas e volta para o painel.
+- `/hooks/billing` ancora o cartao na sessao (`payment.checkoutSession` ou
+  `CHECKOUT_PAID`), nunca no cliente; cliente so ancora o Pix Automatico.
+- Cron de hora em hora (`src/lib/limpeza.ts`) remove checkouts abandonados.
+- Painel: `GET/PUT/DELETE /portal/webhook`.
+- Landing na Vercel com deploy por push; backend segue no Workers.
+
 ## Verificacao
 
+- F2.25/F2.26: 199 testes verdes (17 arquivos), incluindo
+  `test/limpeza.test.ts` e os cenarios do review (cliente de outro tenant
+  nunca ancora cartao, vinculo nunca sobrescrito, reuso da sessao).
 - F2.20/F2.21: `npm run typecheck` + `npm test` com 174 testes verdes (16
   arquivos); `test/portal.test.ts` cobre sessao x link, isolamento pelo token,
   seats, trava de chave, correcao de e-mail, sair de todos e o login sem

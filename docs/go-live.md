@@ -167,6 +167,38 @@ npm run smoke
       sessao salva no navegador de quem pagou; plano B do operador:
       `npm run portal:link -- <tenant_id>`.
 
+## I. Cartao recorrente + landing na Vercel (F2.25/F2.26)
+
+Ordem obrigatoria (o Worker novo grava cartao com `asaas_customer_id` vazio,
+o que so a 0010 permite):
+
+1. Migration 0010:
+
+```bash
+supabase db query --linked --project-ref voojvcdihyymewrhrlti -f supabase/migrations/0010_checkout_cartao.sql
+```
+
+2. Deploy do Worker (tambem registra o cron da faxina, "triggers" no
+   wrangler.jsonc):
+
+```bash
+npm run deploy
+```
+
+3. Webhook do Asaas: incluir `CHECKOUT_PAID` nos eventos do webhook
+   `d25614cc-959f-48d0-80ea-d06dbd2945a2` (segunda ancora do cartao; a
+   primeira e `payment.checkoutSession`, que ja chega nos eventos PAYMENT_*).
+4. Landing: push no `master` do repo da landing publica sozinho na Vercel
+   (`landing-api-linkedin.vercel.app`). Manual, se precisar: `bash publicar.sh`.
+5. Pages antigo (`linkedapi-site.pages.dev`): publicar so um `_redirects` para
+   a Vercel. NAO apagar o projeto enquanto a origem estiver no CORS (o
+   subdominio poderia ser tomado).
+6. Smoke:
+
+```bash
+npm run smoke
+```
+
 ## G. Acabamento
 
 - [ ] [VOCE] Registrar `linkedapi.com.br` e apontar o custom domain no

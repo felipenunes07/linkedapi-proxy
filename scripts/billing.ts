@@ -122,7 +122,7 @@ async function subscribe(
       value: price,
       nextDueDate,
       cycle: 'MONTHLY',
-      description: `LinkedAPI, 1 seat (${tenant.name})`,
+      description: `Playbook API, 1 seat (${tenant.name})`,
       externalReference: tenant.id,
     }),
   });

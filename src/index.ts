@@ -17,6 +17,7 @@ import { checkout } from './routes/checkout';
 import { selfservice } from './routes/selfservice';
 import { admin } from './routes/admin';
 import { portal } from './routes/portal';
+import { limparCheckoutsAbandonados } from './lib/limpeza';
 
 // Data plane: o proxy. Pipeline por request:
 //   autenticar chave -> resolver tenant + account_id (server-side)
@@ -65,9 +66,12 @@ app.route('/admin', admin);
 // (nunca '*': as rotas escrevem no banco, criam cobranca e entregam
 // credencial). Sem ASAAS_API_KEY o checkout responde 404 (ver routes/checkout).
 const LANDING_ORIGINS = new Set([
+  // Landing oficial na Vercel (F2.26). O Pages antigo so redireciona para ca,
+  // mas segue na lista durante a transicao (abas ja abertas no dominio velho).
+  'https://landing-api-linkedin.vercel.app',
   'https://linkedapi-site.pages.dev',
-  'https://linkedapi.com.br',
-  'https://www.linkedapi.com.br',
+  // Dominio proprio entra aqui quando existir. NAO listar dominio que nao e
+  // nosso: quem o registrasse chamaria o checkout com CORS liberado.
 ]);
 
 const landingCors: MiddlewareHandler<{ Bindings: Env; Variables: Variables }> = async (
@@ -87,7 +91,7 @@ const landingCors: MiddlewareHandler<{ Bindings: Env; Variables: Variables }> = 
     if (!allowed) return c.body(null, 403);
     return c.body(null, 204, {
       'Access-Control-Allow-Origin': origin,
-      'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS',
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
       'Access-Control-Allow-Headers': 'content-type, x-portal-token',
       'Access-Control-Max-Age': '86400',
       Vary: 'Origin',
@@ -258,4 +262,15 @@ v1.route('/', selfservice);
 
 app.route('/v1', v1);
 
-export default app;
+// Cron do Worker (wrangler.jsonc, "triggers"): faxina de checkouts abandonados.
+// Object.assign mantem o app (app.request nos testes) e acrescenta o handler
+// `scheduled` que o runtime procura no export default.
+export default Object.assign(app, {
+  scheduled: async (_event: ScheduledController, env: Env, ctx: ExecutionContext) => {
+    ctx.waitUntil(
+      limparCheckoutsAbandonados(env).catch(() => {
+        console.error('limpeza_falhou');
+      }),
+    );
+  },
+});

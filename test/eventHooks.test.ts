@@ -33,13 +33,24 @@ const db: {
       welcome_sent_at?: string | null;
     }
   >;
-  billing: Array<{ tenant_id: string; asaas_subscription_id: string; status: string }>;
+  billing: Array<{
+    tenant_id: string;
+    asaas_subscription_id: string | null;
+    asaas_customer_id?: string | null;
+    asaas_checkout_id?: string | null;
+    payment_method?: string;
+    status: string;
+  }>;
   tokens: TokenRow[];
 } = { accounts: [], tenants: {}, billing: [], tokens: [] };
 
 function matches(row: Record<string, unknown>, filters: Record<string, string>): boolean {
   for (const [key, value] of Object.entries(filters)) {
     if (key === 'select' || key === 'limit' || key === 'order') continue;
+    if (value === 'is.null') {
+      if (row[key] !== null && row[key] !== undefined) return false;
+      continue;
+    }
     if (value.startsWith('eq.')) {
       if (String(row[key]) !== value.slice(3)) return false;
     } else {
@@ -410,7 +421,7 @@ describe('POST /hooks/billing', () => {
     const msg = vi.mocked(sendEmail).mock.calls[0]![1];
     expect(msg.to).toBe('p@example.com');
     // O e-mail leva LINK (uso unico, troca por sessao), nunca a sessao em si.
-    expect(msg.text).toMatch(/painel\.html#t=lk_plink_[0-9a-f]{64}/);
+    expect(msg.text).toMatch(/\/painel#t=lk_plink_[0-9a-f]{64}/);
     expect(msg.text).not.toContain('lk_portal_');
     expect(db.tenants.tP.welcome_sent_at).toBeTruthy();
 
@@ -422,6 +433,132 @@ describe('POST /hooks/billing', () => {
     );
     await new Promise((r) => setTimeout(r, 10));
     expect(sendEmail).toHaveBeenCalledTimes(1);
+  });
+
+  it('Pix Automatico: 1a cobranca (assinatura nova) acha o tenant pelo CLIENTE nosso e grava a assinatura', async () => {
+    db.tenants.tK = { webhook_url: null, webhook_secret: null };
+    db.billing.push({
+      tenant_id: 'tK',
+      asaas_subscription_id: null,
+      asaas_customer_id: 'cus_K',
+      payment_method: 'pix_automatic',
+      status: 'pending',
+    });
+    const res = await post(
+      '/hooks/billing',
+      { event: 'PAYMENT_CONFIRMED', payment: { subscription: 'sub_nova_K', customer: 'cus_K' } },
+      { 'asaas-access-token': ASAAS_TOKEN },
+    );
+    expect(res.status).toBe(200);
+    const linha = db.billing.find((b) => b.tenant_id === 'tK')!;
+    expect(linha.status).toBe('active');
+    expect(linha.asaas_subscription_id).toBe('sub_nova_K');
+  });
+
+  it('F2.25 cartao: 1a cobranca acha o tenant pela SESSAO de checkout e grava assinatura + cliente', async () => {
+    db.tenants.tCard = { webhook_url: null, webhook_secret: null };
+    db.billing.push({
+      tenant_id: 'tCard',
+      asaas_subscription_id: null,
+      asaas_customer_id: null,
+      asaas_checkout_id: 'chk_9',
+      payment_method: 'card',
+      status: 'pending',
+    });
+    const res = await post(
+      '/hooks/billing',
+      {
+        event: 'PAYMENT_CONFIRMED',
+        payment: { checkoutSession: 'chk_9', subscription: 'sub_card_9', customer: 'cus_criado_pelo_asaas' },
+      },
+      { 'asaas-access-token': ASAAS_TOKEN },
+    );
+    expect(res.status).toBe(200);
+    const linha = db.billing.find((b) => b.tenant_id === 'tCard')!;
+    expect(linha).toMatchObject({
+      status: 'active',
+      asaas_subscription_id: 'sub_card_9',
+      asaas_customer_id: 'cus_criado_pelo_asaas',
+    });
+  });
+
+  it('F2.25 cartao: CHECKOUT_PAID tambem ativa pela sessao', async () => {
+    db.tenants.tCard2 = { webhook_url: null, webhook_secret: null };
+    db.billing.push({
+      tenant_id: 'tCard2',
+      asaas_subscription_id: null,
+      asaas_customer_id: null,
+      asaas_checkout_id: 'chk_10',
+      payment_method: 'card',
+      status: 'pending',
+    });
+    await post(
+      '/hooks/billing',
+      { event: 'CHECKOUT_PAID', checkout: { id: 'chk_10', customer: 'cus_10', status: 'PAID' } },
+      { 'asaas-access-token': ASAAS_TOKEN },
+    );
+    expect(db.billing.find((b) => b.tenant_id === 'tCard2')).toMatchObject({
+      status: 'active',
+      asaas_customer_id: 'cus_10',
+    });
+  });
+
+  it('B1: cliente de um tenant de CARTAO nunca serve de ancora (assinatura alheia nao pausa ninguem)', async () => {
+    db.billing.push({
+      tenant_id: 'tB1',
+      asaas_subscription_id: 'sub_legitima',
+      asaas_customer_id: 'cus_vitima',
+      asaas_checkout_id: 'chk_vitima',
+      payment_method: 'card',
+      status: 'active',
+    });
+    // Atacante paga checkout proprio e o Asaas reaproveita o cliente da vitima
+    // por CPF: chega assinatura desconhecida + cliente da vitima, sem sessao nossa.
+    const res = await post(
+      '/hooks/billing',
+      { event: 'PAYMENT_CONFIRMED', payment: { subscription: 'sub_atacante', customer: 'cus_vitima' } },
+      { 'asaas-access-token': ASAAS_TOKEN },
+    );
+    expect(await res.json()).toEqual({ ok: true, ignored: true });
+    await post(
+      '/hooks/billing',
+      { event: 'PAYMENT_OVERDUE', payment: { subscription: 'sub_atacante', customer: 'cus_vitima' } },
+      { 'asaas-access-token': ASAAS_TOKEN },
+    );
+    const vitima = db.billing.find((b) => b.tenant_id === 'tB1')!;
+    expect(vitima).toMatchObject({ status: 'active', asaas_subscription_id: 'sub_legitima' });
+  });
+
+  it('B1: nunca sobrescreve a assinatura ja vinculada (conflito e ignorado)', async () => {
+    db.billing.push({
+      tenant_id: 'tPx',
+      asaas_subscription_id: 'sub_original',
+      asaas_customer_id: 'cus_px',
+      payment_method: 'pix_automatic',
+      status: 'active',
+    });
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await post(
+      '/hooks/billing',
+      { event: 'PAYMENT_OVERDUE', payment: { subscription: 'sub_outra', customer: 'cus_px' } },
+      { 'asaas-access-token': ASAAS_TOKEN },
+    );
+    expect(await res.json()).toEqual({ ok: true, ignored: true });
+    expect(db.billing.find((b) => b.tenant_id === 'tPx')).toMatchObject({
+      asaas_subscription_id: 'sub_original',
+      status: 'active',
+    });
+    expect(errSpy.mock.calls.map((c) => String(c[0]))).toContain('billing_subscription_conflict: tPx');
+    errSpy.mockRestore();
+  });
+
+  it('assinatura E cliente desconhecidos: 200 ignored, sem efeito', async () => {
+    const res = await post(
+      '/hooks/billing',
+      { event: 'PAYMENT_CONFIRMED', payment: { subscription: 'sub_x', customer: 'cus_de_ninguem' } },
+      { 'asaas-access-token': ASAAS_TOKEN },
+    );
+    expect(await res.json()).toEqual({ ok: true, ignored: true });
   });
 
   it('M1: envio que falha devolve a vez; o proximo pagamento confirmado tenta de novo', async () => {

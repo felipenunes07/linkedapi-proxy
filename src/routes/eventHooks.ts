@@ -46,8 +46,9 @@ interface TenantWebhookRow {
 
 interface BillingRow {
   tenant_id: string;
-  asaas_customer_id?: string;
-  payment_method?: string;
+  asaas_customer_id?: string | null;
+  asaas_subscription_id?: string | null;
+  payment_method?: string | null;
 }
 
 // Tetos de tentativa (janela diaria UTC, mesmos contadores KV do /hooks/connect).
@@ -287,7 +288,9 @@ eventHooks.post('/message-received', async (c) => {
 });
 
 // Eventos de pagamento -> status da assinatura + pausa/despausa das contas.
-const BILLING_ACTIVE_EVENTS = new Set(['PAYMENT_CONFIRMED', 'PAYMENT_RECEIVED']);
+// CHECKOUT_PAID (F2.25): o checkout de cartao foi pago. Segunda ancora do
+// cartao, alem de payment.checkoutSession nas cobrancas.
+const BILLING_ACTIVE_EVENTS = new Set(['PAYMENT_CONFIRMED', 'PAYMENT_RECEIVED', 'CHECKOUT_PAID']);
 const BILLING_OVERDUE_EVENTS = new Set(['PAYMENT_OVERDUE']);
 
 eventHooks.post('/billing', async (c) => {
@@ -297,20 +300,26 @@ eventHooks.post('/billing', async (c) => {
   const body = await readJson(c);
   if (body instanceof Response) return body;
 
-  const event = pickString(asRecord(body), 'event');
-  const payment = asRecord(asRecord(body).payment);
-  const subscriptionId = pickString(payment, 'subscription');
-  // No Pix Automatico a assinatura nasce so depois que o pagador autoriza no
-  // banco dele, entao a primeira cobranca pode chegar sem `subscription`. O
-  // `customer` sempre vem e sempre foi gravado por nos: e a ancora confiavel.
-  const customerId = pickString(payment, 'customer');
+  const raiz = asRecord(body);
+  const event = pickString(raiz, 'event');
   if (!event) {
     return c.json({ error: 'invalid_payload' }, 400);
   }
+  // Cobranca (PAYMENT_*) ou checkout pago (CHECKOUT_PAID, cartao). O payload so
+  // fornece CHAVES DE BUSCA; a identidade do tenant vem sempre do nosso banco.
+  const payment = asRecord(raiz.payment);
+  const checkout = asRecord(raiz.checkout);
+  const subscriptionId = pickString(payment, 'subscription');
+  const customerId = pickString(payment, 'customer') ?? pickString(checkout, 'customer');
+  // Cartao (F2.25): a ancora e a sessao de checkout que NOS criamos. Vem em
+  // payment.checkoutSession e, no CHECKOUT_PAID, em checkout.id.
+  const checkoutSession =
+    pickString(payment, 'checkoutSession') ??
+    (event === 'CHECKOUT_PAID' ? pickString(checkout, 'id') : undefined);
 
   const goesActive = BILLING_ACTIVE_EVENTS.has(event);
   const goesOverdue = BILLING_OVERDUE_EVENTS.has(event);
-  const chave = subscriptionId ?? customerId;
+  const chave = checkoutSession ?? subscriptionId ?? customerId;
   if ((!goesActive && !goesOverdue) || !chave) {
     return c.json({ ok: true, ignored: true });
   }
@@ -318,28 +327,71 @@ eventHooks.post('/billing', async (c) => {
     return c.json({ error: 'rate_limited' }, 429);
   }
 
-  // Resolve por assinatura quando ela existe; senao (Pix Automatico), por
-  // cliente. Os dois campos vem do NOSSO banco; o payload so fornece a chave
-  // de busca, nunca a identidade do tenant.
-  const filtro: Record<string, string> = subscriptionId
-    ? { asaas_subscription_id: `eq.${subscriptionId}` }
-    : { asaas_customer_id: `eq.${customerId}` };
-  const subs = await supabaseSelect<BillingRow>(c.env, 'billing_subscriptions', {
-    ...filtro,
-    select: 'tenant_id,asaas_customer_id,payment_method',
-    limit: '1',
-  });
-  const sub = subs[0];
+  // Ordem de resolucao (review F2.25, B1):
+  //   1. sessao de checkout (cartao): id que NOS criamos, unico no banco;
+  //   2. assinatura ja conhecida;
+  //   3. cliente, SO no Pix Automatico: e o unico metodo em que o cliente do
+  //      Asaas foi criado por nos. No cartao o cliente nasce na pagina do Asaas
+  //      a partir do que o pagador digitou (e pode ser um cadastro reaproveitado
+  //      por CPF), entao NUNCA serve de ancora.
+  const buscar = async (filtro: Record<string, string>) =>
+    (
+      await supabaseSelect<BillingRow>(c.env, 'billing_subscriptions', {
+        ...filtro,
+        select: 'tenant_id,asaas_customer_id,asaas_subscription_id,payment_method',
+        limit: '1',
+      })
+    )[0];
+  let sub: BillingRow | undefined;
+  if (checkoutSession) {
+    sub = await buscar({ asaas_checkout_id: `eq.${checkoutSession}` });
+  }
+  if (!sub && subscriptionId) {
+    sub = await buscar({ asaas_subscription_id: `eq.${subscriptionId}` });
+  }
+  if (!sub && customerId) {
+    sub = await buscar({
+      asaas_customer_id: `eq.${customerId}`,
+      payment_method: 'eq.pix_automatic',
+    });
+  }
   if (!sub) {
     // Assinatura que nao conhecemos: confirma e sinaliza (sem ids no log).
     console.error('billing_unknown_subscription');
     return c.json({ ok: true, ignored: true });
   }
 
-  // Atualiza pelo tenant (chave primaria da tabela): funciona tanto quando
-  // achamos por assinatura quanto por cliente. E aproveita para gravar o id da
-  // assinatura na primeira vez que ele aparece (Pix Automatico so o revela
-  // depois que o pagador autoriza).
+  // Nunca SOBRESCREVER o vinculo: uma assinatura diferente da ja gravada e
+  // conflito (ex.: segunda assinatura do mesmo cliente), nunca troca
+  // silenciosa. Sinal interno so com o uuid do tenant (nosso).
+  if (
+    subscriptionId &&
+    sub.asaas_subscription_id &&
+    sub.asaas_subscription_id !== subscriptionId
+  ) {
+    console.error(`billing_subscription_conflict: ${sub.tenant_id}`);
+    return c.json({ ok: true, ignored: true });
+  }
+
+  // Preenche os ids que ainda faltam (Pix Automatico so revela a assinatura
+  // depois da autorizacao; no cartao o Asaas cria o cliente). Filtro is.null:
+  // sob corrida, quem chega depois nao troca o que o primeiro gravou.
+  if (subscriptionId && !sub.asaas_subscription_id) {
+    await supabaseUpdate(
+      c.env,
+      'billing_subscriptions',
+      { tenant_id: `eq.${sub.tenant_id}`, asaas_subscription_id: 'is.null' },
+      { asaas_subscription_id: subscriptionId },
+    );
+  }
+  if (customerId && !sub.asaas_customer_id) {
+    await supabaseUpdate(
+      c.env,
+      'billing_subscriptions',
+      { tenant_id: `eq.${sub.tenant_id}`, asaas_customer_id: 'is.null' },
+      { asaas_customer_id: customerId },
+    );
+  }
   await supabaseUpdate(
     c.env,
     'billing_subscriptions',
@@ -347,7 +399,6 @@ eventHooks.post('/billing', async (c) => {
     {
       status: goesActive ? 'active' : 'overdue',
       updated_at: new Date().toISOString(),
-      ...(subscriptionId ? { asaas_subscription_id: subscriptionId } : {}),
     },
   );
 

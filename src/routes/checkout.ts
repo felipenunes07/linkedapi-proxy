@@ -8,8 +8,11 @@ import {
   createCustomer,
   createPixAutomaticAuthorization,
   cancelPixAutomaticAuthorization,
+  createCardCheckout,
+  cancelCardCheckout,
+  cardCheckoutStatus,
 } from '../lib/asaas';
-import { createPortalToken, seatsInUse } from '../lib/portal';
+import { createPortalToken, seatsInUse, portalUrl } from '../lib/portal';
 
 // Checkout proprio (F2.14, reformulado em F2.18): o cliente assina sem sair da
 // nossa marca, pagando com PIX AUTOMATICO.
@@ -57,6 +60,39 @@ interface TenantRow {
   id: string;
 }
 
+// Texto da cobranca no Asaas. Neutro de proposito: o nome do produto ainda e
+// provisorio. O Pix Automatico aceita no maximo 35 caracteres.
+const DESCRICAO_PLANO = 'Plano mensal 1 conta LinkedIn';
+
+// Sessao de cartao vive 60 min no Asaas; o lock acompanha, para reuso.
+const CARD_LOCK_TTL_SECONDS = 60 * 60;
+
+function lerLockCartao(valor: string): { id: string; url: string } | null {
+  if (!valor.startsWith('card:')) return null;
+  const resto = valor.slice(5);
+  const corte = resto.indexOf('|');
+  if (corte <= 0) return null;
+  const id = resto.slice(0, corte);
+  const url = resto.slice(corte + 1);
+  return url.startsWith('https://') ? { id, url } : null;
+}
+
+// Sessao do painel do comprador (F2.20). Falha aqui NAO desfaz a venda: a
+// cobranca ja esta vinculada e o acesso sai no e-mail de boas-vindas (ou pelo
+// portal:link do operador).
+async function criarSessaoDoComprador(
+  env: Env,
+  tenantId: string,
+): Promise<{ token: string; expires_at: string } | null> {
+  try {
+    const criado = await createPortalToken(env, tenantId);
+    return { token: criado.token, expires_at: criado.expiresAt };
+  } catch {
+    console.error('checkout_portal_token_failed');
+    return null;
+  }
+}
+
 export const checkout = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 checkout.post('/', async (c) => {
@@ -90,7 +126,19 @@ checkout.post('/', async (c) => {
     return c.json({ error: 'invalid_json' }, 400);
   }
 
-  const { name, email, cpf_cnpj } = (body ?? {}) as Record<string, unknown>;
+  const { name, email, cpf_cnpj, payment_method } = (body ?? {}) as Record<string, unknown>;
+
+  // F2.25: Pix Automatico (padrao) ou cartao recorrente no checkout HOSPEDADO
+  // do Asaas. Qualquer outro valor e recusado antes de tocar em qualquer coisa.
+  const metodo =
+    payment_method === undefined || payment_method === 'pix_automatic'
+      ? 'pix_automatic'
+      : payment_method === 'card'
+        ? 'card'
+        : null;
+  if (!metodo) {
+    return c.json({ error: 'invalid_payment_method' }, 400);
+  }
 
   if (typeof name !== 'string' || name.trim().length < 2 || name.length > MAX_NAME) {
     return c.json({ error: 'invalid_name' }, 400);
@@ -109,17 +157,42 @@ checkout.post('/', async (c) => {
     return c.json({ error: 'invalid_document' }, 400);
   }
 
-  // Chaves de KV nunca carregam dado pessoal em claro: sempre o hash.
+  const lockKey = `checkout:lock:${await hashApiKey(`${emailNorm}|${documento}`)}`;
+  const lockAtual = await kv.get(lockKey);
+  if (lockAtual) {
+    // Cartao (review F2.25, I1): quem volta do Asaas pelo "cancelar" ou
+    // recarrega a pagina REUSA a mesma sessao enquanto ela estiver ativa, em
+    // vez de travar em 409 ou abrir uma segunda assinatura (cobranca dupla).
+    const anterior = metodo === 'card' ? lerLockCartao(lockAtual) : null;
+    if (!anterior) {
+      return c.json({ error: 'checkout_in_progress' }, 409);
+    }
+    const status = await cardCheckoutStatus(c.env, anterior.id).catch(() => null);
+    if (status === 'ACTIVE') {
+      c.header('Cache-Control', 'no-store');
+      return c.json({
+        ok: true,
+        data: { method: 'card', checkout_url: anterior.url, portal: null, reused: true },
+      });
+    }
+    if (status !== 'CANCELED' && status !== 'EXPIRED') {
+      // Paga, ou nao deu para conferir: nunca abrir outra por cima.
+      return c.json({ error: 'checkout_in_progress' }, 409);
+    }
+    // Sessao anterior morreu: segue e cria outra (o tenant antigo, que nunca
+    // pagou, sai na faxina de checkouts abandonados).
+  }
+
+  // Teto por documento DEPOIS do reuso acima: voltar do Asaas e reabrir a
+  // mesma sessao nao cria nada e nao pode esgotar as tentativas do cliente.
+  // Tudo o que cria cliente/cobranca continua contado. Chaves de KV nunca
+  // carregam dado pessoal em claro: sempre o hash.
   const docHash = await hashApiKey(documento);
   const porDoc = await bumpAttempts(kv, attemptKey('checkout-doc', docHash));
   if (porDoc > MAX_ATTEMPTS_PER_DOC) {
     return c.json({ error: 'rate_limited' }, 429);
   }
 
-  const lockKey = `checkout:lock:${await hashApiKey(`${emailNorm}|${documento}`)}`;
-  if (await kv.get(lockKey)) {
-    return c.json({ error: 'checkout_in_progress' }, 409);
-  }
   await kv.put(lockKey, '1', { expirationTtl: LOCK_TTL_SECONDS });
   const liberarLock = () => kv.delete(lockKey).catch(() => {});
 
@@ -148,29 +221,36 @@ checkout.post('/', async (c) => {
     return c.json({ error: 'internal_error' }, 500);
   }
 
-  // Passo 1: cliente no Asaas. NAO gera cobranca, entao e o lugar certo para
-  // descobrir documento/e-mail recusados sem sujar o banco.
-  let customerId: string;
-  try {
-    customerId = await createCustomer(c.env, {
-      name: name.trim(),
-      email: emailNorm,
-      cpfCnpj: documento,
-      externalReference: 'checkout',
-      // Notificacao do Asaas desligada ate o primeiro pagamento: senao
-      // qualquer um dispara cobranca por e-mail contra o CPF de um terceiro.
-      notificationsEnabled: false,
-    });
-  } catch (err) {
-    if (err instanceof Error && err.message.startsWith('asaas_customer_failed:400')) {
+  // Passo 1 (so Pix): cliente no Asaas. NAO gera cobranca, entao e o lugar
+  // certo para descobrir documento/e-mail recusados sem sujar o banco.
+  //
+  // No CARTAO quem cria o cliente e a pagina hospedada do Asaas: o checkout
+  // deles NAO aceita cliente pre-criado (o campo `customer` e recusado mesmo
+  // com id existente, confirmado no real em 2026-09-10). A ancora do cartao
+  // passa a ser o id da sessao (asaas_checkout_id), nunca o cliente.
+  let customerId: string | null = null;
+  if (metodo === 'pix_automatic') {
+    try {
+      customerId = await createCustomer(c.env, {
+        name: name.trim(),
+        email: emailNorm,
+        cpfCnpj: documento,
+        externalReference: 'checkout',
+        // Notificacao do Asaas desligada ate o primeiro pagamento: senao
+        // qualquer um dispara cobranca por e-mail contra o CPF de um terceiro.
+        notificationsEnabled: false,
+      });
+    } catch (err) {
+      if (err instanceof Error && err.message.startsWith('asaas_customer_failed:400')) {
+        await liberarLock();
+        return c.json({ error: 'invalid_document' }, 400);
+      }
+      console.error(
+        `checkout_customer_failed: ${err instanceof Error ? err.name : 'erro'}`,
+      );
       await liberarLock();
-      return c.json({ error: 'invalid_document' }, 400);
+      return c.json({ error: 'billing_unavailable' }, 502);
     }
-    console.error(
-      `checkout_customer_failed: ${err instanceof Error ? err.name : 'erro'}`,
-    );
-    await liberarLock();
-    return c.json({ error: 'billing_unavailable' }, 502);
   }
 
   // Passo 2: tenant.
@@ -192,6 +272,78 @@ checkout.post('/', async (c) => {
     return c.json({ error: 'internal_error' }, 500);
   }
 
+  // CARTAO (F2.25): checkout hospedado do Asaas. O cartao e digitado LA; aqui
+  // so criamos a sessao (nada e cobrado ate o pagador concluir) e devolvemos
+  // a URL para o navegador ir ate ela.
+  if (metodo === 'card') {
+    const painel = portalUrl(c.env);
+    if (!painel) {
+      await supabaseDelete(c.env, 'tenants', { id: `eq.${tenantId}` }).catch(() => {});
+      await liberarLock();
+      return c.json({ error: 'billing_unavailable' }, 502);
+    }
+    const site = new URL(painel).origin;
+    let sessao: { checkoutId: string; url: string };
+    try {
+      sessao = await createCardCheckout(c.env, {
+        value: price,
+        description: DESCRICAO_PLANO,
+        externalReference: tenantId,
+        successUrl: `${painel}?pagamento=cartao`,
+        cancelUrl: `${site}/#assinar`,
+        expiredUrl: `${site}/#assinar`,
+      });
+    } catch (err) {
+      await supabaseDelete(c.env, 'tenants', { id: `eq.${tenantId}` }).catch(() => {
+        console.error(`checkout_orphan_tenant: ${tenantId}`);
+      });
+      console.error(
+        `checkout_card_session_failed: ${err instanceof Error ? err.name : 'erro'}`,
+      );
+      await liberarLock();
+      return c.json({ error: 'billing_unavailable' }, 502);
+    }
+
+    try {
+      await supabaseInsert(c.env, 'billing_subscriptions', {
+        tenant_id: tenantId,
+        // Preenchido pelo webhook no 1o pagamento (o Asaas cria o cliente).
+        asaas_customer_id: null,
+        asaas_checkout_id: sessao.checkoutId,
+        payment_method: 'card',
+        status: 'pending',
+        updated_at: new Date().toISOString(),
+      });
+    } catch {
+      // Sem vinculo a cobranca seria irrecuperavel pelo webhook: cancela a
+      // sessao antes que alguem pague (o id nao e segredo; e o fio para
+      // reconciliar a mao se o cancelamento tambem falhar).
+      const cancelada = await cancelCardCheckout(c.env, sessao.checkoutId).catch(() => false);
+      console.error(`checkout_orphan_card_session: ${sessao.checkoutId} cancelada=${cancelada}`);
+      await liberarLock();
+      return c.json({ error: 'billing_unavailable' }, 502);
+    }
+
+    // O lock passa a guardar a sessao (id|url, nada secreto) pela vida dela:
+    // uma nova tentativa com os mesmos dados reusa esta em vez de criar outra.
+    await kv.put(lockKey, `card:${sessao.checkoutId}|${sessao.url}`, {
+      expirationTtl: CARD_LOCK_TTL_SECONDS,
+    });
+
+    const portalCartao = await criarSessaoDoComprador(c.env, tenantId);
+    c.header('Cache-Control', 'no-store');
+    return c.json({
+      ok: true,
+      data: { value: price, method: 'card', checkout_url: sessao.url, portal: portalCartao },
+    });
+  }
+
+  if (!customerId) {
+    // Nao acontece (o Pix sempre cria o cliente no passo 1); guarda de tipo.
+    await liberarLock();
+    return c.json({ error: 'internal_error' }, 500);
+  }
+
   // Passo 3: autorizacao do Pix Automatico. A partir daqui existe cobranca.
   let authorizationId: string;
   let qr: { image: string; code: string; expires_at: string | null } | null;
@@ -199,7 +351,7 @@ checkout.post('/', async (c) => {
     const resultado = await createPixAutomaticAuthorization(c.env, {
       customerId,
       value: price,
-      description: 'LinkedAPI 1 conta LinkedIn',
+      description: DESCRICAO_PLANO,
       // contractId tem teto de 35 caracteres; o uuid sem hifens cabe em 32.
       contractId: tenantId.replace(/-/g, ''),
     });
@@ -248,13 +400,7 @@ checkout.post('/', async (c) => {
   // acompanhar o pagamento e abrir o painel (conectar LinkedIn, gerar chave).
   // Falha aqui NAO desfaz a venda: a cobranca ja esta vinculada e o link do
   // painel tambem sai no e-mail de boas-vindas (ou pelo portal:link).
-  let portal: { token: string; expires_at: string } | null = null;
-  try {
-    const criado = await createPortalToken(c.env, tenantId);
-    portal = { token: criado.token, expires_at: criado.expiresAt };
-  } catch {
-    console.error('checkout_portal_token_failed');
-  }
+  const portal = await criarSessaoDoComprador(c.env, tenantId);
 
   // Resposta carrega credencial (token do painel): nunca cachear.
   c.header('Cache-Control', 'no-store');

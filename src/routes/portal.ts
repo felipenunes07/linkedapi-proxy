@@ -9,6 +9,7 @@ import { fireAndForget } from '../lib/async';
 import { emailValido } from '../lib/documento';
 import { emailConfigured } from '../lib/email';
 import { updateCustomerEmail } from '../lib/asaas';
+import { isValidWebhookUrl } from './selfservice';
 import {
   resolvePortalToken,
   exchangeLinkToken,
@@ -55,6 +56,7 @@ const MAX_TOKEN_LENGTH = 200;
 const MAX_EMAIL = 150;
 const DEFAULT_SEAT_CAP = 10;
 const KEY_LOCK_TTL_SECONDS = 60;
+const MAX_WEBHOOK_CHANGES_PER_TENANT = 20;
 const LINK_TOKEN_FORMAT = /^lk_plink_[0-9a-f]{64}$/;
 
 interface AccountRow {
@@ -327,6 +329,63 @@ portal.post('/key', async (c) => {
   } finally {
     await kv.delete(lockKey).catch(() => {});
   }
+});
+
+// Webhook do cliente pelo painel (F2.26): o mesmo que PUT/GET/DELETE
+// /v1/webhook, para quem prefere configurar pela tela, como no dashboard da
+// Unipile. Mesma validacao anti-SSRF (so https:443, sem IP literal nem nome
+// interno); o secret de assinatura aparece UMA vez e nunca e reexibido.
+portal.get('/webhook', async (c) => {
+  const s = await gate(c);
+  if (s instanceof Response) return s;
+  const rows = await supabaseSelect<{ webhook_url?: string | null }>(c.env, 'tenants', {
+    id: `eq.${s.tenantId}`,
+    select: 'webhook_url',
+    limit: '1',
+  });
+  const url = rows[0]?.webhook_url ?? null;
+  return c.json({ ok: true, data: { url, configured: url !== null } });
+});
+
+portal.put('/webhook', async (c) => {
+  const s = await gate(c);
+  if (s instanceof Response) return s;
+  const body = await lerCorpo(c);
+  const url = body?.url;
+  if (typeof url !== 'string' || !isValidWebhookUrl(url)) {
+    return c.json({ error: 'invalid_url' }, 400);
+  }
+  const trocas = await bumpAttempts(c.env.RATE_LIMIT, attemptKey('portal-webhook', s.tenantId));
+  if (trocas > MAX_WEBHOOK_CHANGES_PER_TENANT) {
+    return c.json({ error: 'rate_limited' }, 429);
+  }
+  const secret = `lk_whsec_${randomHex32()}`;
+  await supabaseUpdate(
+    c.env,
+    'tenants',
+    { id: `eq.${s.tenantId}` },
+    { webhook_url: url, webhook_secret: secret },
+  );
+  return c.json({
+    ok: true,
+    data: {
+      url,
+      secret,
+      note: 'Guarde o secret agora: ele assina cada evento (X-Webhook-Signature) e nao sera exibido de novo.',
+    },
+  });
+});
+
+portal.delete('/webhook', async (c) => {
+  const s = await gate(c);
+  if (s instanceof Response) return s;
+  await supabaseUpdate(
+    c.env,
+    'tenants',
+    { id: `eq.${s.tenantId}` },
+    { webhook_url: null, webhook_secret: null },
+  );
+  return c.json({ ok: true, data: { configured: false } });
 });
 
 // Correcao do e-mail de contato (review I2): um erro de digitacao no checkout

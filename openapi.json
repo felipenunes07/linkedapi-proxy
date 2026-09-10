@@ -1,14 +1,14 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "LinkedAPI",
+    "title": "Playbook API",
     "version": "1.0.0",
     "description": "API para automacao de LinkedIn. Autentique com sua chave no header `X-API-KEY` e use os endpoints abaixo para enviar mensagens, enviar convites e listar suas conversas.\n\nA conta de LinkedIn usada em cada chamada e determinada pela sua chave, voce nao precisa (nem pode) informa-la no request.\n\nToda resposta de sucesso vem no envelope `{ \"ok\": true, \"data\": ... }`. Erros vem como `{ \"error\": \"<codigo>\" }`, com campos extras conforme o caso."
   },
   "servers": [
     {
       "url": "https://linkedapi-proxy.victor-58a.workers.dev",
-      "description": "Producao (workers.dev interino; muda quando linkedapi.com.br for registrado)"
+      "description": "Producao (workers.dev)"
     },
     {
       "url": "http://localhost:8787",

@@ -14,7 +14,7 @@ const SCALAR_SRI =
 export const docsHtml = `<!doctype html>
 <html lang="pt-BR">
   <head>
-    <title>LinkedAPI, Documentacao</title>
+    <title>Playbook API, Documentacao</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
   </head>

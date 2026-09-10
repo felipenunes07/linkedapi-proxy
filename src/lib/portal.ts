@@ -30,7 +30,7 @@ export const WELCOME_LINK_TTL_MS = 72 * 60 * 60 * 1000;
 export const LOGIN_LINK_TTL_MS = 30 * 60 * 1000;
 // Mesmo TTL do fluxo do operador (Marco 4): o link e para ser usado na hora.
 const CONNECT_LINK_TTL_MS = 2 * 60 * 60 * 1000;
-const DEFAULT_PORTAL_URL = 'https://linkedapi-site.pages.dev/painel.html';
+const DEFAULT_PORTAL_URL = 'https://landing-api-linkedin.vercel.app/painel';
 
 // D7: sem Recruiter/Sales Navigator/caixas de organizacao.
 const DISABLED_FEATURES = [
@@ -331,7 +331,7 @@ export async function createConnectLink(
 function emailHtml(titulo: string, texto: string, link: string, botao: string, validade: string): string {
   return `<!doctype html><html lang="pt-BR"><body style="margin:0;background:#f4f5f7;font-family:Arial,Helvetica,sans-serif">
 <div style="max-width:520px;margin:24px auto;background:#ffffff;border-radius:12px;padding:28px">
-<p style="font-size:14px;font-weight:bold;color:#0F2736;margin:0 0 18px">LinkedAPI</p>
+<p style="font-size:14px;font-weight:bold;color:#0F2736;margin:0 0 18px">Playbook API</p>
 <h1 style="font-size:20px;color:#0F2736;margin:0 0 12px">${titulo}</h1>
 <p style="font-size:15px;color:#333333;line-height:1.5;margin:0">${texto}</p>
 <p style="margin:26px 0"><a href="${link}" style="background:#DDDF4C;color:#0F2736;padding:13px 22px;border-radius:8px;text-decoration:none;font-weight:bold;display:inline-block">${botao}</a></p>
@@ -383,7 +383,7 @@ export async function enviarBoasVindas(env: Env, tenantId: string): Promise<void
         to: email,
         subject: 'Pagamento confirmado: conecte seu LinkedIn',
         text:
-          'Seu pagamento da LinkedAPI foi confirmado.\n\n' +
+          'Seu pagamento da Playbook API foi confirmado.\n\n' +
           'Abra o painel para conectar seu LinkedIn e gerar sua chave de API:\n' +
           `${link}\n\n` +
           'Este link e pessoal, funciona uma unica vez e vale por 72 horas. ' +
@@ -449,16 +449,16 @@ export async function enviarLinkDeAcesso(env: Env, email: string): Promise<void>
       : '';
   const ok = await sendEmail(env, {
     to: email,
-    subject: 'Seu link de acesso a LinkedAPI',
+    subject: 'Seu link de acesso a Playbook API',
     text:
-      'Aqui esta o link para entrar no seu painel da LinkedAPI:\n' +
+      'Aqui esta o link para entrar no seu painel da Playbook API:\n' +
       `${principal}${extras}\n\n` +
       'Este link e pessoal, funciona uma unica vez e vale por 30 minutos.',
     html: emailHtml(
       'Seu link de acesso',
       links.length > 1
         ? 'Aqui esta o link para entrar no painel da sua conta mais recente. Os links das demais contas estao na versao em texto deste e-mail.'
-        : 'Aqui esta o link para entrar no seu painel da LinkedAPI.',
+        : 'Aqui esta o link para entrar no seu painel da Playbook API.',
       principal,
       'Entrar no painel',
       '30 minutos',

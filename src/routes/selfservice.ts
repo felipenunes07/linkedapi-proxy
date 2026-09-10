@@ -57,7 +57,7 @@ selfservice.post('/keys/rotate', async (c) => {
 // bloquear credencial embutida, porta fora do padrao, IP literal e nomes
 // internos reduz o uso do proxy como SSRF/amplificador (o resto da defesa e o
 // redirect:manual + timeout na entrega, ver lib/webhooks.ts).
-function isValidWebhookUrl(url: string): boolean {
+export function isValidWebhookUrl(url: string): boolean {
   if (url.length > 500) return false;
   let parsed: URL;
   try {

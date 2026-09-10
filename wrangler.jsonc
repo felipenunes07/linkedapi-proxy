@@ -21,11 +21,16 @@
     { "binding": "RATE_LIMIT", "id": "6418f47785a5457da8da180234fa5086" }
   ],
 
+  // Faxina de checkouts abandonados (src/lib/limpeza.ts), de hora em hora.
+  "triggers": {
+    "crons": ["23 * * * *"]
+  },
+
   // Variaveis NAO secretas podem ir em "vars". Segredos, nunca.
   "vars": {
-    "ENVIRONMENT": "development",
-    // Pagina do painel do cliente na landing (F2.20). Trocar pelo dominio
-    // proprio quando linkedapi.com.br existir.
-    "PORTAL_URL": "https://linkedapi-site.pages.dev/painel.html"
+    "ENVIRONMENT": "production",
+    // Pagina do painel do cliente na landing (F2.20), hospedada na Vercel
+    // (F2.26). Trocar quando houver dominio proprio.
+    "PORTAL_URL": "https://landing-api-linkedin.vercel.app/painel"
   }
 }

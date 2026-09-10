@@ -12,7 +12,7 @@ const DEFAULT_BASE = 'https://api.asaas.com/v3';
 
 // O Asaas RECUSA requisicao sem User-Agent (erro user_agent_not_informed) e o
 // fetch do Workers nao manda um por padrao. Confirmado no real em 2026-09-03.
-const USER_AGENT = 'LinkedAPI/1.0';
+const USER_AGENT = 'PlaybookAPI/1.0';
 
 // Timeout curto: o checkout e sincrono e o cliente esta esperando.
 const TIMEOUT_MS = 10_000;
@@ -287,12 +287,123 @@ export async function updateCustomerEmail(
   return res.ok;
 }
 
-// CARTAO: fica FORA da nossa infra de proposito (F2.18). O Asaas nao oferece
+// CARTAO RECORRENTE via Checkout hospedado do Asaas (F2.25). O pagador digita o
+// cartao (e os dados dele) NA PAGINA DO ASAAS: nenhum dado de cartao toca a
+// nossa infra (zero escopo PCI, mesma razao do F2.18).
+//
+// O checkout NAO aceita cliente pre-criado (o campo `customer` e recusado mesmo
+// com id existente; confirmado no real em 2026-09-10) e o `customerData` exige
+// telefone e endereco completo. Entao o Asaas cria o cliente, e a ANCORA do
+// cartao no /hooks/billing e o id desta sessao (payment.checkoutSession e
+// CHECKOUT_PAID), que nos gravamos em billing_subscriptions.asaas_checkout_id.
+export interface CardCheckoutResult {
+  checkoutId: string;
+  url: string;
+}
+
+// Data/hora de Sao Paulo (UTC-3, sem horario de verao desde 2019) no formato
+// que o Asaas usa em `subscription.nextDueDate`: primeira cobranca = hoje.
+function agoraSaoPaulo(): string {
+  const d = new Date(Date.now() - 3 * 60 * 60 * 1000);
+  return d.toISOString().slice(0, 19).replace('T', ' ');
+}
+
+export async function createCardCheckout(
+  env: Env,
+  input: {
+    value: number;
+    description: string;
+    externalReference: string;
+    successUrl: string;
+    cancelUrl: string;
+    expiredUrl: string;
+  },
+): Promise<CardCheckoutResult> {
+  const res = await asaasFetch(env, '/checkouts', {
+    method: 'POST',
+    body: JSON.stringify({
+      billingTypes: ['CREDIT_CARD'],
+      chargeTypes: ['RECURRENT'],
+      minutesToExpire: 60,
+      externalReference: input.externalReference,
+      callback: {
+        successUrl: input.successUrl,
+        cancelUrl: input.cancelUrl,
+        expiredUrl: input.expiredUrl,
+      },
+      items: [
+        {
+          name: 'Plano mensal',
+          description: input.description,
+          quantity: 1,
+          value: input.value,
+        },
+      ],
+      subscription: {
+        cycle: 'MONTHLY',
+        nextDueDate: agoraSaoPaulo(),
+      },
+    }),
+  });
+  if (!res.ok) {
+    console.error(`asaas_card_checkout_rejected: ${await validationDetail(res)}`);
+    throw new Error(`asaas_card_checkout_failed:${res.status}`);
+  }
+  const data = await readJson<{ id?: string; link?: string }>(
+    res,
+    'asaas_card_checkout_failed',
+  );
+  if (!data.id) {
+    throw new Error('asaas_card_checkout_failed:no_id');
+  }
+  // Usa o `link` da resposta (formato real: www.asaas.com/checkoutSession/show/
+  // <id>), mas SO se for do dominio do Asaas: o navegador do cliente vai para
+  // la. Sem link valido, monta pelo id. Sandbox e producao tem hosts diferentes.
+  const host = baseUrl(env).includes('sandbox')
+    ? 'https://sandbox.asaas.com'
+    : 'https://www.asaas.com';
+  const url =
+    typeof data.link === 'string' && LINK_ASAAS.test(data.link)
+      ? data.link
+      : `${host}/checkoutSession/show/${encodeURIComponent(data.id)}`;
+  return { checkoutId: data.id, url };
+}
+
+const LINK_ASAAS = /^https:\/\/(www\.|sandbox\.)?asaas\.com\//;
+
+export async function cancelCardCheckout(env: Env, checkoutId: string): Promise<boolean> {
+  const res = await asaasFetch(env, `/checkouts/${encodeURIComponent(checkoutId)}/cancel`, {
+    method: 'POST',
+  });
+  return res.ok;
+}
+
+// Status de uma sessao de checkout (ACTIVE, CANCELED, EXPIRED, PAID). null se o
+// Asaas nao respondeu: quem chama trata como "nao sei" e nao arrisca nada.
+export async function cardCheckoutStatus(env: Env, checkoutId: string): Promise<string | null> {
+  const res = await asaasFetch(env, `/checkouts/${encodeURIComponent(checkoutId)}`);
+  if (!res.ok) return null;
+  const data = await readJson<{ status?: string }>(res, 'asaas_checkout_status_failed');
+  return typeof data.status === 'string' ? data.status : null;
+}
+
+// Status de uma autorizacao de Pix Automatico. null se o Asaas nao respondeu.
+export async function pixAutomaticAuthorizationStatus(
+  env: Env,
+  authorizationId: string,
+): Promise<string | null> {
+  const res = await asaasFetch(
+    env,
+    `/pix/automatic/authorizations/${encodeURIComponent(authorizationId)}`,
+  );
+  if (!res.ok) return null;
+  const data = await readJson<{ status?: string }>(res, 'asaas_pix_auto_status_failed');
+  return typeof data.status === 'string' ? data.status : null;
+}
+
+// CARTAO no NOSSO formulario continua proibido (F2.18): o Asaas nao oferece
 // tokenizacao no navegador e exige SAQ-D de quem digita cartao em pagina
-// propria, entao quem quiser cartao vai para um Link de Pagamento recorrente
-// hospedado por eles. Nenhum dado de cartao toca este codigo.
-// O link e criado uma vez pelo operador (scripts/billing.ts) e a URL fica em
-// CARD_CHECKOUT_URL.
+// propria. Por isso o cartao vai pelo checkout hospedado acima.
 
 // Desfaz a assinatura quando o vinculo no nosso banco falha: sem isso o cliente
 // seria cobrado por uma assinatura que o webhook nunca conseguiria resolver.

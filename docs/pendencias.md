@@ -104,6 +104,17 @@ Atualizado em 2026-09-10.
       chaves ativas por tenant na rotacao; mover webhook_url/secret para tabela
       propria (hoje em tenants; qualquer select:* futuro ali vazaria o secret).
 
+## Cartao recorrente + Vercel (F2.25/F2.26)
+
+- [x] Cartao recorrente pelo checkout hospedado do Asaas, ancorado na sessao.
+- [x] Landing e painel na Vercel com deploy por push; webhooks no painel.
+- [ ] Primeira compra real no CARTAO (confirma no real que as cobrancas
+      mensais trazem `payment.checkoutSession` ou a assinatura ja vinculada).
+- [ ] Remover `linkedapi-site.pages.dev` do CORS depois de 30 dias de
+      redirecionamento (e so entao apagar o projeto Pages).
+- [ ] Nome definitivo do produto (hoje "Playbook API", provisorio) e dominio
+      proprio (Vercel + CORS + PORTAL_URL).
+
 ## Achado do review F2.13 - RESOLVIDO no F2.22 (teto de 10x o limite, contando falhas)
 
 - Teto de TENTATIVAS nas escritas: hoje so escrita ACEITA consome cota (M3.10,

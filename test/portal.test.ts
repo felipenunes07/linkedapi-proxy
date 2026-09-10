@@ -578,6 +578,62 @@ describe('PUT /portal/email (I2: corrigir erro de digitacao)', () => {
   });
 });
 
+describe('webhook pelo painel (F2.26)', () => {
+  it('PUT grava url https + secret NOVO so no tenant da sessao; GET nunca reexibe o secret', async () => {
+    const env = baseEnv();
+    const res = await req(
+      '/portal/webhook',
+      { method: 'PUT', token: TOKEN_A, body: { url: 'https://cliente-a.example/hook', tenant_id: 'tB' } },
+      env,
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Cache-Control')).toBe('no-store');
+    const body = (await res.json()) as { data: { url: string; secret: string } };
+    expect(body.data.url).toBe('https://cliente-a.example/hook');
+    expect(body.data.secret).toMatch(/^lk_whsec_[0-9a-f]{64}$/);
+    const tA = db.tenants!.find((t) => t.id === 'tA')!;
+    expect(tA.webhook_url).toBe('https://cliente-a.example/hook');
+    expect(db.tenants!.find((t) => t.id === 'tB')!.webhook_url).toBeUndefined();
+
+    const get = await req('/portal/webhook', { token: TOKEN_A }, env);
+    const text = await get.text();
+    expect(JSON.parse(text)).toEqual({
+      ok: true,
+      data: { url: 'https://cliente-a.example/hook', configured: true },
+    });
+    expect(text).not.toContain('lk_whsec_');
+  });
+
+  it.each(['http://cliente.example/hook', 'https://localhost/hook', 'https://10.0.0.1/hook', 'nao-e-url'])(
+    'destino perigoso ou invalido (%s) e recusado',
+    async (url) => {
+      const res = await req('/portal/webhook', { method: 'PUT', token: TOKEN_A, body: { url } });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: 'invalid_url' });
+    },
+  );
+
+  it('DELETE remove url e secret', async () => {
+    const env = baseEnv();
+    await req('/portal/webhook', { method: 'PUT', token: TOKEN_A, body: { url: 'https://a.example/h' } }, env);
+    const res = await req('/portal/webhook', { method: 'DELETE', token: TOKEN_A }, env);
+    expect(res.status).toBe(200);
+    const tA = db.tenants!.find((t) => t.id === 'tA')!;
+    expect(tA.webhook_url).toBeNull();
+    expect(tA.webhook_secret).toBeNull();
+  });
+
+  it('preflight libera DELETE para a landing', async () => {
+    const res = await app.request(
+      '/portal/webhook',
+      { method: 'OPTIONS', headers: { Origin: 'https://landing-api-linkedin.vercel.app' } },
+      baseEnv(),
+    );
+    expect(res.status).toBe(204);
+    expect(res.headers.get('Access-Control-Allow-Methods')).toContain('DELETE');
+  });
+});
+
 describe('POST /portal/logout', () => {
   it('revoga so a sessao usada; a proxima chamada com ela da 401', async () => {
     const env = baseEnv();
