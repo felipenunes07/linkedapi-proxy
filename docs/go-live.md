@@ -198,9 +198,11 @@ npm run deploy
    (`landing-api-linkedin.vercel.app`). Feito em 2026-09-10 (push `c12e0ac`
    pela conta felipenunes07; conferido no ar: marca Playbook API, opcao de
    cartao, /painel 200). Manual, se precisar: `bash publicar.sh`.
-5. Pages antigo (`linkedapi-site.pages.dev`): publicar so um `_redirects` para
-   a Vercel. NAO apagar o projeto enquanto a origem estiver no CORS (o
-   subdominio poderia ser tomado).
+5. [x] Pages antigo (`linkedapi-site.pages.dev`): `_redirects` publicado em
+   2026-09-10 (deployment `e57fcef7`), `/*` para a Vercel com 301, caminho e
+   query preservados (conferido em `/`, `/painel` e `/termos?x=1`). NAO
+   apagar o projeto enquanto a origem estiver no CORS (o subdominio poderia
+   ser tomado).
 6. Smoke:
 
 ```bash
