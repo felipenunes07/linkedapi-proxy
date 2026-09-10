@@ -78,6 +78,31 @@ async function fetchTenant(tenantId: string): Promise<TenantRow> {
   return tenant;
 }
 
+interface VinculoRow {
+  status: string;
+  payment_method: string | null;
+  asaas_subscription_id: string | null;
+  asaas_checkout_id: string | null;
+  asaas_authorization_id: string | null;
+}
+
+async function fetchVinculo(tenantId: string): Promise<VinculoRow | null> {
+  const supabaseUrl = loadEnv('SUPABASE_URL');
+  const serviceRole = loadEnv('SUPABASE_SERVICE_ROLE_KEY');
+  const url = new URL(`${supabaseUrl}/rest/v1/billing_subscriptions`);
+  url.searchParams.set('tenant_id', `eq.${tenantId}`);
+  url.searchParams.set(
+    'select',
+    'status,payment_method,asaas_subscription_id,asaas_checkout_id,asaas_authorization_id',
+  );
+  url.searchParams.set('limit', '1');
+  const res = await fetch(url.toString(), { headers: supabaseHeaders(serviceRole) });
+  if (!res.ok) {
+    fail(`Falha ao buscar o vinculo de cobranca (HTTP ${res.status}).`);
+  }
+  return ((await res.json()) as VinculoRow[])[0] ?? null;
+}
+
 async function subscribe(
   tenantId: string,
   nome: string,
@@ -85,6 +110,25 @@ async function subscribe(
   email: string,
 ): Promise<void> {
   const tenant = await fetchTenant(tenantId);
+
+  // Review F2.27: nunca apagar um vinculo vivo. Assinatura, sessao de cartao
+  // ou autorizacao Pix ja gravadas podem estar cobrando no Asaas, e o upsert
+  // abaixo apagaria o fio: a cobranca seguiria sem tenant. Cancele no Asaas o
+  // que estiver ativo e so entao rode de novo com --substituir no fim.
+  const vinculo = await fetchVinculo(tenantId);
+  if (
+    vinculo &&
+    (vinculo.asaas_subscription_id || vinculo.asaas_checkout_id || vinculo.asaas_authorization_id) &&
+    !process.argv.includes('--substituir')
+  ) {
+    fail(
+      `O tenant ja tem vinculo de cobranca (metodo ${vinculo.payment_method ?? '?'}, status ${vinculo.status}, ` +
+        `assinatura ${vinculo.asaas_subscription_id ?? '-'}, sessao ${vinculo.asaas_checkout_id ?? '-'}, ` +
+        `autorizacao ${vinculo.asaas_authorization_id ?? '-'}). Cancele no Asaas o que estiver ativo ` +
+        'e rode de novo com --substituir no fim da linha.',
+    );
+  }
+
   const price = Number(loadEnvOptional('PLAN_PRICE_BRL') ?? DEFAULT_PRICE_BRL);
   if (!Number.isFinite(price) || price <= 0) {
     fail('PLAN_PRICE_BRL invalido.');
@@ -201,7 +245,7 @@ async function status(): Promise<void> {
 
 function usage(): never {
   console.error('uso:');
-  console.error('  npm run billing:subscribe -- <tenant_id> "<nome>" <cpf_cnpj> <email>');
+  console.error('  npm run billing:subscribe -- <tenant_id> "<nome>" <cpf_cnpj> <email> [--substituir]');
   console.error('  npm run billing:status');
   process.exit(1);
 }

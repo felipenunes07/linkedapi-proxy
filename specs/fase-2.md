@@ -153,6 +153,10 @@ tem `npm run portal:link -- <tenant_id>` como plano B.
 
 ## Verificacao
 
+- F2.28: 223 testes verdes (18 arquivos): cancelamento sem resposta nao
+  encerra, CHECKOUT_PAID alheio ignorado, vencida anterior nao prende quem
+  pagou, contestacao aberta segura, teto do /billing sempre 200, atraso de
+  cobranca sem dinheiro pausa, reconferencia antes do delete da faxina.
 - F2.27: 212 testes verdes (18 arquivos): faxina (Pix sem resposta nunca e
   cancelado, cobranca com dinheiro mantem, erro isolado por item), nova
   tentativa e troca de metodo, eventos fora de ordem, chargeback, conta

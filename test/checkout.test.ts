@@ -88,7 +88,7 @@ vi.mock('../src/lib/asaas', () => ({
     checkoutId: 'chk_123',
     url: 'https://asaas.com/checkoutSession/show?id=chk_123',
   })),
-  cancelCardCheckout: vi.fn(async () => true),
+  cancelCardCheckout: vi.fn(async () => 'ok'),
   // Checkout anterior (nova tentativa): sem cobranca e QR ainda nao autorizado.
   listPayments: vi.fn(async () => []),
   pixAutomaticAuthorizationStatus: vi.fn(async () => 'CREATED'),
@@ -104,7 +104,7 @@ import {
   listPayments,
   pixAutomaticAuthorizationStatus,
 } from '../src/lib/asaas';
-import { supabaseInsert, supabaseDelete } from '../src/lib/supabase';
+import { supabaseInsert, supabaseDelete, supabaseUpdate } from '../src/lib/supabase';
 import { hashApiKey } from '../src/lib/hash';
 
 function baseEnv(overrides: Partial<Env> = {}): Env {
@@ -371,7 +371,14 @@ describe('POST /checkout, cartao recorrente no checkout hospedado (F2.25)', () =
     const env = envCartao();
     await post({ ...BODY_OK, payment_method: 'card' }, env);
     vi.mocked(listPayments).mockResolvedValueOnce([
-      { id: 'pay_1', status: 'CONFIRMED', subscription: 'sub_1', customer: 'cus_1', checkoutSession: 'chk_123' },
+      {
+        id: 'pay_1',
+        status: 'CONFIRMED',
+        subscription: 'sub_1',
+        customer: 'cus_1',
+        checkoutSession: 'chk_123',
+        dueDate: null,
+      },
     ]);
     const paga = await post({ ...BODY_OK, payment_method: 'card' }, env);
     expect(paga.status).toBe(409);
@@ -393,6 +400,25 @@ describe('POST /checkout, cartao recorrente no checkout hospedado (F2.25)', () =
       ['pix_automatic', 'canceled'],
       ['card', 'pending'],
     ]);
+  });
+
+  it('F2.27: cancelar a sessao anterior ficou sem resposta do Asaas: 409, nada novo', async () => {
+    const env = envCartao();
+    await post({ ...BODY_OK, payment_method: 'card' }, env);
+    vi.mocked(cancelCardCheckout).mockResolvedValueOnce('falhou');
+    const res = await post({ ...BODY_OK, payment_method: 'card' }, env);
+    expect(res.status).toBe(409);
+    expect(createCardCheckout).toHaveBeenCalledTimes(1);
+    expect(vinculos().map((v) => v.status)).toEqual(['pending']);
+  });
+
+  it('F2.27: o webhook ativou o vinculo anterior no meio do caminho: 409, nada novo', async () => {
+    const env = envCartao();
+    await post({ ...BODY_OK, payment_method: 'card' }, env);
+    vi.mocked(supabaseUpdate).mockResolvedValueOnce([]);
+    const res = await post({ ...BODY_OK, payment_method: 'card' }, env);
+    expect(res.status).toBe(409);
+    expect(createCardCheckout).toHaveBeenCalledTimes(1);
   });
 
   it('falha ao gravar o vinculo CANCELA a sessao de cartao e remove o tenant orfao', async () => {
@@ -508,6 +534,19 @@ describe('POST /checkout, falhas e abusos', () => {
     expect(segunda.status).toBe(200);
     expect(cancelPixAutomaticAuthorization).toHaveBeenCalledWith(expect.anything(), 'auth_123');
     expect(vi.mocked(createPixAutomaticAuthorization).mock.calls).toHaveLength(2);
+  });
+
+  it('F2.27: quem ja esgotou o teto do dia nao perde o checkout vivo (429 antes de encerrar)', async () => {
+    const env = baseEnv();
+    for (let i = 0; i < 5; i++) {
+      expect((await post(BODY_OK, env)).status).toBe(200);
+    }
+    const sexta = await post(BODY_OK, env);
+    expect(sexta.status).toBe(429);
+    // As tentativas 2 a 5 encerraram a anterior; a 6a nao tocou no QR vivo.
+    expect(cancelPixAutomaticAuthorization).toHaveBeenCalledTimes(4);
+    const todos = vinculos();
+    expect(todos[todos.length - 1]!.status).toBe('pending');
   });
 
   it('requisicao ainda em andamento para os mesmos dados: 409 sem tocar no Asaas', async () => {

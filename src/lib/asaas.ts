@@ -371,11 +371,28 @@ export async function createCardCheckout(
 
 const LINK_ASAAS = /^https:\/\/(www\.|sandbox\.)?asaas\.com\//;
 
-export async function cancelCardCheckout(env: Env, checkoutId: string): Promise<boolean> {
-  const res = await asaasFetch(env, `/checkouts/${encodeURIComponent(checkoutId)}/cancel`, {
-    method: 'POST',
-  });
-  return res.ok;
+// Resultado do cancelamento de uma sessao (review F2.27):
+//   'ok'       cancelada agora;
+//   'recusado' 4xx definitivo: a sessao ja venceu, foi cancelada ou foi paga;
+//   'falhou'   sem resposta, 5xx ou 429: a sessao PODE seguir viva e pagavel.
+// So 'falhou' e "nao sei". Nunca lanca.
+export type ResultadoCancelamento = 'ok' | 'recusado' | 'falhou';
+
+export async function cancelCardCheckout(
+  env: Env,
+  checkoutId: string,
+): Promise<ResultadoCancelamento> {
+  let res: Response;
+  try {
+    res = await asaasFetch(env, `/checkouts/${encodeURIComponent(checkoutId)}/cancel`, {
+      method: 'POST',
+    });
+  } catch {
+    return 'falhou';
+  }
+  if (res.ok) return 'ok';
+  if (res.status === 429 || res.status >= 500) return 'falhou';
+  return 'recusado';
 }
 
 // ---------------------------------------------------------------------------
@@ -394,6 +411,8 @@ export interface CobrancaResumo {
   subscription: string | null;
   customer: string | null;
   checkoutSession: string | null;
+  // Vencimento 'YYYY-MM-DD': ordena as cobrancas da mesma assinatura.
+  dueDate: string | null;
 }
 
 function texto(v: unknown): string | null {
@@ -410,6 +429,7 @@ function resumir(p: Record<string, unknown>): CobrancaResumo | null {
     subscription: texto(p.subscription),
     customer: texto(p.customer),
     checkoutSession: texto(p.checkoutSession),
+    dueDate: texto(p.dueDate),
   };
 }
 
@@ -452,20 +472,23 @@ export async function listPayments(
   return lista.every(casa) ? (lista as CobrancaResumo[]) : null;
 }
 
-// Status de cobranca que significam dinheiro recebido (ou a caminho, no cartao
-// aprovado). Qualquer um deles prova que o tenant NAO e checkout abandonado.
-export const STATUS_PAGOS = new Set([
+// Cobranca QUITADA: dinheiro efetivamente recebido ou confirmado. Usado para
+// descartar um PAYMENT_OVERDUE velho. Negativacao pedida (DUNNING_REQUESTED),
+// cartao em analise de risco, estorno e chargeback NAO provam pagamento e
+// ficam de fora de proposito: neles o atraso tem que valer (review F2.27).
+export const STATUS_QUITADOS = new Set([
   'CONFIRMED',
   'RECEIVED',
   'RECEIVED_IN_CASH',
-  'REFUND_REQUESTED',
-  'REFUND_IN_PROGRESS',
+  'DUNNING_RECEIVED',
+]);
+
+// Contestacao do cartao ainda aberta: enquanto durar, pagamento novo da mesma
+// assinatura nao despausa (senao "cobra, contesta, reativa" todo mes).
+export const STATUS_CONTESTADOS = new Set([
   'CHARGEBACK_REQUESTED',
   'CHARGEBACK_DISPUTE',
   'AWAITING_CHARGEBACK_REVERSAL',
-  'DUNNING_REQUESTED',
-  'DUNNING_RECEIVED',
-  'AWAITING_RISK_ANALYSIS',
 ]);
 
 // Status de uma autorizacao de Pix Automatico. null se o Asaas nao respondeu.

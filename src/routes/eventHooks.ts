@@ -11,7 +11,8 @@ import {
   enableCustomerNotifications,
   getPayment,
   listPayments,
-  STATUS_PAGOS,
+  STATUS_CONTESTADOS,
+  STATUS_QUITADOS,
 } from '../lib/asaas';
 import { statusAoReativar } from '../lib/billing';
 import { fireAndForget } from '../lib/async';
@@ -70,10 +71,15 @@ const ENTITY_DAILY_LIMITS = {
 // Gate padrao das rotas de hook: exige KV (fail-closed, como o rate limit),
 // valida o secret compartilhado (hash-compare, timing-safe) e conta a
 // tentativa por IP ANTES de tocar banco ou origem.
+// naoTravar (so /hooks/billing): o Asaas entrega em fila SEQUENCIAL; qualquer
+// resposta nao-2xx trava a fila inteira, com eventos nossos atras, e repetida
+// faz o Asaas interromper a fila. Estourou o teto = descarta com 200 e sinaliza
+// (review F2.27). A conta Asaas e compartilhada: o volume inclui outras vendas.
 async function gate(
   c: Ctx,
   headerName: string,
   expected: string | undefined,
+  naoTravar = false,
 ): Promise<Response | null> {
   const kv = c.env.RATE_LIMIT;
   if (!kv) {
@@ -88,6 +94,10 @@ async function gate(
   }
   const ip = c.req.header('CF-Connecting-IP') ?? 'unknown';
   if ((await bumpAttempts(kv, attemptKey('hook-ip', ip))) > HOOK_IP_DAILY_LIMIT) {
+    if (naoTravar) {
+      console.error('billing_throttled');
+      return c.json({ ok: true, ignored: true });
+    }
     return c.json({ error: 'rate_limited' }, 429);
   }
   return null;
@@ -241,11 +251,12 @@ eventHooks.post('/account-status', async (c) => {
       { id: `eq.${account.id}`, status: 'eq.disconnected' },
       { status: novo },
     );
-    if (novo === 'active') {
-      fireAndForget(c, () =>
-        notifyTenant(c.env, account.tenant_id, 'account.reconnected', {}),
-      );
-    }
+    // A sessao voltou de fato: o integrador sempre fica sabendo, mesmo com a
+    // conta pausada (a API responde 402 account_paused ate o pagamento). Sem
+    // isso o ultimo evento dele seguiria sendo account.disconnected (F2.27).
+    fireAndForget(c, () =>
+      notifyTenant(c.env, account.tenant_id, 'account.reconnected', {}),
+    );
   }
 
   return c.json({ ok: true });
@@ -306,7 +317,7 @@ const BILLING_ACTIVE_EVENTS = new Set(['PAYMENT_CONFIRMED', 'PAYMENT_RECEIVED', 
 const BILLING_OVERDUE_EVENTS = new Set(['PAYMENT_OVERDUE', 'PAYMENT_CHARGEBACK_REQUESTED']);
 
 eventHooks.post('/billing', async (c) => {
-  const denied = await gate(c, 'asaas-access-token', c.env.ASAAS_HOOK_TOKEN);
+  const denied = await gate(c, 'asaas-access-token', c.env.ASAAS_HOOK_TOKEN, true);
   if (denied) return denied;
 
   const body = await readJson(c);
@@ -322,7 +333,13 @@ eventHooks.post('/billing', async (c) => {
   const payment = asRecord(raiz.payment);
   const checkout = asRecord(raiz.checkout);
   const paymentId = pickString(payment, 'id');
-  const cartao = pickString(payment, 'billingType') === 'CREDIT_CARD';
+  const billingType = pickString(payment, 'billingType');
+  const cartao = billingType === 'CREDIT_CARD';
+  // Review F2.27: o CLIENTE so ancora cobranca PIX vinda de PAYMENT_* (lista de
+  // permitidos, nao de proibidos). CHECKOUT_PAID resolve SO pela sessao: o
+  // customer dele pode ser um cadastro reaproveitado por CPF numa venda alheia
+  // da mesma conta Asaas.
+  const clienteAncora = event !== 'CHECKOUT_PAID' && billingType === 'PIX';
   let subscriptionId = pickString(payment, 'subscription');
   let customerId = pickString(payment, 'customer') ?? pickString(checkout, 'customer');
   // Cartao (F2.25): a ancora e a sessao de checkout que NOS criamos. Vem em
@@ -345,17 +362,13 @@ eventHooks.post('/billing', async (c) => {
   if ((!goesActive && !goesOverdue) || !chave) {
     return c.json({ ok: true, ignored: true });
   }
-  if (await entityThrottled(c, 'billing-sub', chave)) {
-    return c.json({ error: 'rate_limited' }, 429);
-  }
-
   // Ordem de resolucao (review F2.25, B1):
   //   1. sessao de checkout (cartao): id que NOS criamos, unico no banco;
   //   2. assinatura ja conhecida;
-  //   3. cliente, SO no Pix Automatico: e o unico metodo em que o cliente do
-  //      Asaas foi criado por nos. No cartao o cliente nasce na pagina do Asaas
-  //      a partir do que o pagador digitou (e pode ser um cadastro reaproveitado
-  //      por CPF), entao NUNCA serve de ancora.
+  //   3. cliente, SO em cobranca PIX de tenant Pix Automatico: e o unico metodo
+  //      em que o cliente do Asaas foi criado por nos. No cartao o cliente nasce
+  //      na pagina do Asaas a partir do que o pagador digitou (e pode ser um
+  //      cadastro reaproveitado por CPF), entao NUNCA serve de ancora.
   const buscar = async (filtro: Record<string, string>) =>
     (
       await supabaseSelect<BillingRow>(c.env, 'billing_subscriptions', {
@@ -371,7 +384,7 @@ eventHooks.post('/billing', async (c) => {
   if (!sub && subscriptionId) {
     sub = await buscar({ asaas_subscription_id: `eq.${subscriptionId}` });
   }
-  if (!sub && customerId && !cartao) {
+  if (!sub && customerId && clienteAncora) {
     sub = await buscar({
       asaas_customer_id: `eq.${customerId}`,
       payment_method: 'eq.pix_automatic',
@@ -392,6 +405,14 @@ eventHooks.post('/billing', async (c) => {
   if (!sub) {
     // Assinatura que nao conhecemos: confirma e sinaliza (sem ids no log).
     console.error('billing_unknown_subscription');
+    return c.json({ ok: true, ignored: true });
+  }
+
+  // Teto por TENANT nosso, contado so depois de resolver: evento de outra venda
+  // da conta nunca consome cota. Estourou = 200 e sinal, nunca 429 (a fila do
+  // Asaas e sequencial; ver gate). Review F2.27.
+  if (await entityThrottled(c, 'billing-sub', sub.tenant_id)) {
+    console.error(`billing_throttled: ${sub.tenant_id}`);
     return c.json({ ok: true, ignored: true });
   }
 
@@ -441,25 +462,44 @@ eventHooks.post('/billing', async (c) => {
   // Review F2.25 (#1, ordem): o Asaas entrega em fila e reentrega; um evento
   // velho nunca vence o estado atual da cobranca.
   if (event === 'PAYMENT_OVERDUE' && paymentId) {
-    // Atraso de uma cobranca que, no Asaas, ja foi paga: evento velho.
+    // Atraso de uma cobranca que, no Asaas, ja foi QUITADA: evento velho.
+    // Negativacao pedida, analise de risco, estorno ou chargeback nao contam
+    // como quitada (review F2.27).
     const atual = await getPayment(c.env, paymentId).catch(() => null);
-    if (atual && STATUS_PAGOS.has(atual.status)) {
+    if (atual && STATUS_QUITADOS.has(atual.status)) {
       console.error(`billing_overdue_stale: ${sub.tenant_id}`);
       return c.json({ ok: true, ignored: true });
     }
   }
-  if (goesActive) {
-    // Pagamento de uma cobranca enquanto OUTRA da mesma assinatura segue
-    // vencida (ex.: confirmacao atrasada do mes 1 depois do atraso do mes 2):
-    // continua pausado. Asaas sem resposta: vale o evento (ele e autenticado).
+  if (goesActive && event !== 'CHECKOUT_PAID') {
+    // Pagamento que NAO despausa (review F2.27):
+    //   - outra cobranca da mesma assinatura VENCIDA com vencimento POSTERIOR
+    //     ao desta (ex.: confirmacao atrasada do mes 1 depois do atraso do mes
+    //     2). Vencida ANTERIOR nao segura: quem pagou o mes corrente volta a
+    //     usar, senao o Asaas cobraria todo mes com a conta pausada;
+    //   - contestacao (chargeback) ainda aberta na assinatura.
+    // Asaas sem resposta: vale o evento (ele e autenticado). CHECKOUT_PAID e a
+    // 1a cobranca de uma assinatura nova: nao ha o que conferir.
     const assinatura = subscriptionId ?? sub.asaas_subscription_id ?? undefined;
     if (assinatura) {
-      const vencidas = await listPayments(
-        c.env,
-        { subscription: assinatura, status: 'OVERDUE' },
-        1,
-      ).catch(() => null);
-      if (vencidas && vencidas.length > 0) {
+      const vencimentoPago =
+        pickString(payment, 'dueDate') ??
+        (paymentId
+          ? ((await getPayment(c.env, paymentId).catch(() => null))?.dueDate ?? null)
+          : null);
+      const cobrancas = await listPayments(c.env, { subscription: assinatura }, 50).catch(
+        () => null,
+      );
+      if (cobrancas?.some((x) => STATUS_CONTESTADOS.has(x.status))) {
+        console.error(`billing_chargeback_open: ${sub.tenant_id}`);
+        return c.json({ ok: true, ignored: true });
+      }
+      if (
+        vencimentoPago &&
+        cobrancas?.some(
+          (x) => x.status === 'OVERDUE' && x.dueDate !== null && x.dueDate > vencimentoPago,
+        )
+      ) {
         console.error(`billing_still_overdue: ${sub.tenant_id}`);
         return c.json({ ok: true, ignored: true });
       }

@@ -10,12 +10,15 @@ let pendentes: Array<Record<string, unknown>> = [];
 let comConta = new Set<string>();
 let comChave = new Set<string>();
 let falhaNaConta = new Set<string>();
+let refeitos = new Set<string>();
 let filtroPendentes: Record<string, string> | null = null;
 
 vi.mock('../src/lib/supabase', () => ({
   supabaseSelect: vi.fn(async (_env: Env, table: string, filters: Record<string, string>) => {
     const tenant = String(filters.tenant_id ?? '').replace(/^eq\./, '');
     if (table === 'billing_subscriptions') {
+      // Reconferencia na hora de apagar (filtra pelo tenant).
+      if (filters.tenant_id) return refeitos.has(tenant) ? [] : [{ tenant_id: tenant }];
       filtroPendentes = filters;
       return pendentes;
     }
@@ -31,8 +34,8 @@ vi.mock('../src/lib/supabase', () => ({
 }));
 
 vi.mock('../src/lib/asaas', () => ({
-  // Sessao de cartao com 24h ja venceu: o cancelamento e recusado.
-  cancelCardCheckout: vi.fn(async () => false),
+  // Sessao de cartao com 24h ja venceu: o cancelamento e recusado (4xx).
+  cancelCardCheckout: vi.fn(async () => 'recusado'),
   listPayments: vi.fn(async () => []),
   pixAutomaticAuthorizationStatus: vi.fn(async () => 'EXPIRED'),
   cancelPixAutomaticAuthorization: vi.fn(async () => true),
@@ -68,7 +71,7 @@ function pix(tenant: string) {
   };
 }
 function cobranca(status: string, checkoutSession: string | null = null) {
-  return { id: 'pay', status, subscription: null, customer: null, checkoutSession };
+  return { id: 'pay', status, subscription: null, customer: null, checkoutSession, dueDate: null };
 }
 const apagados = () =>
   vi.mocked(supabaseDelete).mock.calls.map((c) => (c[2] as { id: string }).id);
@@ -79,6 +82,7 @@ beforeEach(() => {
   comConta = new Set();
   comChave = new Set();
   falhaNaConta = new Set();
+  refeitos = new Set();
   filtroPendentes = null;
   vi.spyOn(console, 'error').mockImplementation(() => {});
   vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -88,12 +92,13 @@ describe('faxina de checkouts abandonados', () => {
   it('so busca vinculos sem assinatura, parados ha 24h, num lote que cabe no Workers Free', async () => {
     await limparCheckoutsAbandonados(env);
     expect(filtroPendentes).toMatchObject({
-      status: 'in.(pending,canceled)',
+      // overdue: QR do Pix que venceu sem pagamento (F2.27).
+      status: 'in.(pending,canceled,overdue)',
       payment_method: 'in.(card,pix_automatic)',
       // BLOQUEANTE #7: vinculo refeito pelo operador (com assinatura) nunca entra.
       asaas_subscription_id: 'is.null',
       order: 'updated_at.asc',
-      limit: '7',
+      limit: '6',
     });
     const desde = Date.parse(String(filtroPendentes!.updated_at).replace(/^lt\./, ''));
     expect(Date.now() - desde).toBeGreaterThan(23.9 * 60 * 60 * 1000);
@@ -166,6 +171,23 @@ describe('faxina de checkouts abandonados', () => {
     expect(bump[1]).toBe('billing_subscriptions');
     expect(bump[2]).toEqual({ tenant_id: 'eq.quebrado', asaas_subscription_id: 'is.null' });
     expect(bump[3]).toHaveProperty('updated_at');
+  });
+
+  it('F2.27: cancelamento da sessao sem resposta do Asaas: mantem (a sessao pode estar viva)', async () => {
+    pendentes = [cartao('semResposta')];
+    vi.mocked(cancelCardCheckout).mockResolvedValueOnce('falhou');
+    const r = await limparCheckoutsAbandonados(env);
+    expect(r).toEqual({ removidos: 0, mantidos: 1 });
+    expect(listPayments).not.toHaveBeenCalled();
+    expect(supabaseDelete).not.toHaveBeenCalled();
+  });
+
+  it('F2.27: vinculo refeito pelo operador durante as checagens: nao apaga', async () => {
+    pendentes = [cartao('refeito')];
+    refeitos.add('refeito');
+    const r = await limparCheckoutsAbandonados(env);
+    expect(r).toEqual({ removidos: 0, mantidos: 1 });
+    expect(supabaseDelete).not.toHaveBeenCalled();
   });
 
   it('sem ASAAS_API_KEY nao faz nada', async () => {

@@ -159,6 +159,16 @@ import { sendEmail } from '../src/lib/email';
 import { createHostedAuthLink, getAccount } from '../src/lib/unipile';
 import { memoryKV } from './helpers';
 
+// Cobranca como o listPayments/getPayment devolve (so o que o Worker usa).
+function cobrancaDe(
+  id: string,
+  status: string,
+  subscription: string | null,
+  dueDate: string | null = null,
+) {
+  return { id, status, subscription, customer: null, checkoutSession: null, dueDate };
+}
+
 function baseEnv(overrides: Partial<Env> = {}): Env {
   return {
     ENVIRONMENT: 'test',
@@ -298,8 +308,10 @@ describe('POST /hooks/account-status', () => {
     );
     expect(res.status).toBe(200);
     expect(db.accounts[1]?.status).toBe('paused');
-    await new Promise((r) => setTimeout(r, 10));
-    expect(deliverWebhook).not.toHaveBeenCalled();
+    // A sessao voltou de fato: o integrador fica sabendo, mesmo pausada (a API
+    // responde 402 account_paused ate o pagamento). Review F2.27.
+    await vi.waitFor(() => expect(deliverWebhook).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(deliverWebhook).mock.calls[0]![2]).toBe('account.reconnected');
   });
 
   it('conta pausada (billing) NAO muda por status de sessao', async () => {
@@ -472,7 +484,10 @@ describe('POST /hooks/billing', () => {
     });
     const res = await post(
       '/hooks/billing',
-      { event: 'PAYMENT_CONFIRMED', payment: { subscription: 'sub_nova_K', customer: 'cus_K' } },
+      {
+        event: 'PAYMENT_CONFIRMED',
+        payment: { subscription: 'sub_nova_K', customer: 'cus_K', billingType: 'PIX' },
+      },
       { 'asaas-access-token': ASAAS_TOKEN },
     );
     expect(res.status).toBe(200);
@@ -527,6 +542,7 @@ describe('POST /hooks/billing', () => {
               subscription: 'sub_card_10',
               customer: 'cus_10',
               checkoutSession: 'chk_10',
+              dueDate: null,
             },
           ]
         : [],
@@ -560,6 +576,7 @@ describe('POST /hooks/billing', () => {
       subscription: 'sub_card_11',
       customer: 'cus_11',
       checkoutSession: 'chk_11',
+      dueDate: null,
     });
     const res = await post(
       '/hooks/billing',
@@ -595,16 +612,22 @@ describe('POST /hooks/billing', () => {
     expect(db.billing[0]?.status).toBe('overdue');
   });
 
-  it('#1: confirmacao atrasada com OUTRA cobranca vencida na assinatura: continua pausado', async () => {
+  it('#1: confirmacao atrasada do mes 1 com o mes 2 VENCIDO: continua pausado', async () => {
     vi.mocked(listPayments).mockImplementation(async (_env, filtro) =>
-      filtro.subscription === 'sub_C' && filtro.status === 'OVERDUE'
-        ? [{ id: 'pay_mes2', status: 'OVERDUE', subscription: 'sub_C', customer: null, checkoutSession: null }]
+      filtro.subscription === 'sub_C'
+        ? [
+            cobrancaDe('pay_mes2', 'OVERDUE', 'sub_C', '2026-10-10'),
+            cobrancaDe('pay_mes1', 'CONFIRMED', 'sub_C', '2026-09-10'),
+          ]
         : [],
     );
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const res = await post(
       '/hooks/billing',
-      { event: 'PAYMENT_CONFIRMED', payment: { id: 'pay_mes1', subscription: 'sub_C' } },
+      {
+        event: 'PAYMENT_CONFIRMED',
+        payment: { id: 'pay_mes1', subscription: 'sub_C', dueDate: '2026-09-10' },
+      },
       { 'asaas-access-token': ASAAS_TOKEN },
     );
     expect(await res.json()).toEqual({ ok: true, ignored: true });
@@ -615,13 +638,7 @@ describe('POST /hooks/billing', () => {
   });
 
   it('#1: atraso de uma cobranca que no Asaas ja foi paga (evento velho) nao pausa', async () => {
-    vi.mocked(getPayment).mockResolvedValue({
-      id: 'pay_A1',
-      status: 'RECEIVED',
-      subscription: 'sub_A',
-      customer: null,
-      checkoutSession: null,
-    });
+    vi.mocked(getPayment).mockResolvedValue(cobrancaDe('pay_A1', 'RECEIVED', 'sub_A'));
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const res = await post(
       '/hooks/billing',
@@ -685,7 +702,10 @@ describe('POST /hooks/billing', () => {
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const res = await post(
       '/hooks/billing',
-      { event: 'PAYMENT_OVERDUE', payment: { subscription: 'sub_outra', customer: 'cus_px' } },
+      {
+        event: 'PAYMENT_OVERDUE',
+        payment: { subscription: 'sub_outra', customer: 'cus_px', billingType: 'PIX' },
+      },
       { 'asaas-access-token': ASAAS_TOKEN },
     );
     expect(await res.json()).toEqual({ ok: true, ignored: true });
@@ -728,6 +748,106 @@ describe('POST /hooks/billing', () => {
     await vi.waitFor(() => expect(sendEmail).toHaveBeenCalledTimes(2));
     await vi.waitFor(() => expect(db.tenants.tQ?.welcome_sent_at).toBeTruthy());
     expect(errSpy.mock.calls.map((c) => String(c[0]))).toContain('portal_welcome_email_failed');
+    errSpy.mockRestore();
+  });
+
+  it('F2.27: mes 2 vencido e mes 3 pago: reativa (vencida ANTERIOR nao segura quem pagou)', async () => {
+    vi.mocked(listPayments).mockImplementation(async (_env, filtro) =>
+      filtro.subscription === 'sub_C'
+        ? [
+            cobrancaDe('pay_mes2', 'OVERDUE', 'sub_C', '2026-10-10'),
+            cobrancaDe('pay_mes3', 'CONFIRMED', 'sub_C', '2026-11-10'),
+          ]
+        : [],
+    );
+    const res = await post(
+      '/hooks/billing',
+      {
+        event: 'PAYMENT_CONFIRMED',
+        payment: { id: 'pay_mes3', subscription: 'sub_C', dueDate: '2026-11-10' },
+      },
+      { 'asaas-access-token': ASAAS_TOKEN },
+    );
+    expect(await res.json()).toEqual({ ok: true });
+    expect(db.accounts[2]?.status).toBe('active');
+    expect(db.billing[1]?.status).toBe('active');
+  });
+
+  it('F2.27: contestacao (chargeback) aberta na assinatura: pagamento novo nao despausa', async () => {
+    vi.mocked(listPayments).mockImplementation(async (_env, filtro) =>
+      filtro.subscription === 'sub_C'
+        ? [cobrancaDe('pay_mes1', 'CHARGEBACK_DISPUTE', 'sub_C', '2026-09-10')]
+        : [],
+    );
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await post(
+      '/hooks/billing',
+      {
+        event: 'PAYMENT_CONFIRMED',
+        payment: { id: 'pay_mes2', subscription: 'sub_C', dueDate: '2026-10-10', billingType: 'CREDIT_CARD' },
+      },
+      { 'asaas-access-token': ASAAS_TOKEN },
+    );
+    expect(await res.json()).toEqual({ ok: true, ignored: true });
+    expect(db.accounts[2]?.status).toBe('paused');
+    expect(errSpy.mock.calls.map((c) => String(c[0]))).toContain('billing_chargeback_open: tC');
+    errSpy.mockRestore();
+  });
+
+  it.each(['DUNNING_REQUESTED', 'AWAITING_RISK_ANALYSIS'])(
+    'F2.27: atraso de cobranca em %s (sem dinheiro) pausa',
+    async (status) => {
+      vi.mocked(getPayment).mockResolvedValue(cobrancaDe('pay_A2', status, 'sub_A'));
+      await post(
+        '/hooks/billing',
+        { event: 'PAYMENT_OVERDUE', payment: { id: 'pay_A2', subscription: 'sub_A' } },
+        { 'asaas-access-token': ASAAS_TOKEN },
+      );
+      expect(db.accounts[0]?.status).toBe('paused');
+      expect(db.billing[0]?.status).toBe('overdue');
+    },
+  );
+
+  it('F2.27: CHECKOUT_PAID de sessao alheia com o cliente de um tenant Pix pendente: ignorado', async () => {
+    db.billing.push({
+      tenant_id: 'tPend',
+      asaas_subscription_id: null,
+      asaas_customer_id: 'cus_T',
+      payment_method: 'pix_automatic',
+      status: 'pending',
+    });
+    vi.mocked(listPayments).mockResolvedValue([
+      { ...cobrancaDe('pay_x', 'CONFIRMED', 'sub_alheia'), customer: 'cus_T', checkoutSession: 'chk_alheio' },
+    ]);
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await post(
+      '/hooks/billing',
+      { event: 'CHECKOUT_PAID', checkout: { id: 'chk_alheio', customer: 'cus_T', status: 'PAID' } },
+      { 'asaas-access-token': ASAAS_TOKEN },
+    );
+    expect(await res.json()).toEqual({ ok: true, ignored: true });
+    expect(db.billing.find((b) => b.tenant_id === 'tPend')).toMatchObject({
+      status: 'pending',
+      asaas_subscription_id: null,
+    });
+    errSpy.mockRestore();
+  });
+
+  it('F2.27: teto do /billing estourado responde 200 (nunca trava a fila sequencial do Asaas)', async () => {
+    const env = baseEnv();
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    let ultima: Response | undefined;
+    for (let i = 0; i < 51; i++) {
+      ultima = await post(
+        '/hooks/billing',
+        { event: 'PAYMENT_CONFIRMED', payment: { id: `pay_${i}`, subscription: 'sub_A' } },
+        { 'asaas-access-token': ASAAS_TOKEN },
+        env,
+      );
+    }
+    expect(ultima!.status).toBe(200);
+    expect(await ultima!.json()).toEqual({ ok: true, ignored: true });
+    expect(errSpy.mock.calls.map((c) => String(c[0]))).toContain('billing_throttled: tA');
     errSpy.mockRestore();
   });
 

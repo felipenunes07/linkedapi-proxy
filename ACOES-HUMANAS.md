@@ -1,6 +1,6 @@
 # Acoes humanas (o que SO uma pessoa pode fazer para o projeto avancar)
 
-Todo o codigo esta pronto, testado (212 testes) e revisado. Este arquivo lista
+Todo o codigo esta pronto, testado (223 testes) e revisado. Este arquivo lista
 APENAS o que precisa de mao humana. Os comandos de deploy estao em
 [docs/go-live.md](docs/go-live.md) (secoes H e I).
 

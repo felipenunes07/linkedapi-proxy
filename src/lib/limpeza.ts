@@ -11,9 +11,10 @@ import {
 // review). Roda de hora em hora pelo cron do Worker (wrangler.jsonc).
 //
 // Alvo: tenant que nasceu no checkout (cartao ou Pix Automatico) e NUNCA pagou:
-// vinculo `pending` (ou `canceled`, quando o proprio cliente recomecou o
-// checkout ou trocou de metodo) sem assinatura e parado ha mais de 24h. Nesse
-// ponto a sessao de cartao (60 min) e o QR do Pix (1h) ja venceram.
+// vinculo `pending`, `canceled` (o proprio cliente recomecou o checkout ou
+// trocou de metodo) ou `overdue` (o QR imediato do Pix venceu sem pagamento e
+// o webhook marcou o atraso), sempre SEM assinatura e parado ha mais de 24h.
+// Nesse ponto a sessao de cartao (60 min) e o QR do Pix (1h) ja venceram.
 //
 // Regra do PRD: so se apaga o que NUNCA valeu. Antes de apagar:
 //   - sem conta LinkedIn e sem chave de API;
@@ -23,9 +24,10 @@ import {
 // Apagar o tenant leva junto, em cascata, o vinculo e as credenciais do painel.
 
 const IDADE_MINIMA_MS = 24 * 60 * 60 * 1000;
-// Workers Free: 50 subrequests por invocacao. Cada pendente custa ate 6 (2
-// selects, ate 3 chamadas ao Asaas, 1 escrita) e a busca 1: 7 cabem com folga.
-const LOTE = 7;
+// Workers Free: 50 subrequests por invocacao. Cada pendente custa ate 7 (3
+// selects, ate 3 chamadas ao Asaas, 1 escrita) e a busca 1: 6 cabem com folga.
+const LOTE = 6;
+const STATUS_FAXINA = 'in.(pending,canceled,overdue)';
 // Autorizacao de Pix Automatico que nunca vai debitar.
 const PIX_MORTO = new Set(['CANCELLED', 'EXPIRED', 'REFUSED']);
 // Cobranca sem dinheiro. Qualquer outro status (paga, estornada, em analise)
@@ -66,11 +68,13 @@ export async function pendentePorAncora(
 export async function encerrarCheckout(env: Env, p: PendenteRow): Promise<boolean> {
   if (p.payment_method === 'card' && p.asaas_checkout_id) {
     // Nao existe GET da sessao de checkout (404 no real em 2026-09-10).
-    // Cancelar primeiro: sessao viva morre aqui; vencida, cancelada ou paga so
-    // recusa. Depois, a prova: nenhuma cobranca nasceu dela. No cartao ate
-    // cobranca pendente conta, porque ela so existe se o pagador enviou o
-    // cartao.
-    await cancelCardCheckout(env, p.asaas_checkout_id).catch(() => false);
+    // Cancelar primeiro: sessao viva morre aqui ('ok'); vencida, cancelada ou
+    // paga recusa com 4xx ('recusado'). Sem resposta, 5xx ou 429 ('falhou') a
+    // sessao pode seguir viva e pagavel: nao sei = nao encerra (review F2.27;
+    // senao nasciam duas assinaturas no mesmo cartao). Depois, a prova: nenhuma
+    // cobranca nasceu dela. No cartao ate cobranca pendente conta, porque ela
+    // so existe se o pagador enviou o cartao.
+    if ((await cancelCardCheckout(env, p.asaas_checkout_id)) === 'falhou') return false;
     const cobrancas = await listPayments(env, { checkoutSession: p.asaas_checkout_id }, 1).catch(
       () => null,
     );
@@ -112,6 +116,22 @@ async function nuncaValeu(env: Env, tenantId: string): Promise<boolean> {
   return !contas[0] && !chaves[0];
 }
 
+// Reconfere na hora de apagar (review F2.27): o operador pode ter refeito o
+// vinculo (billing:subscribe grava assinatura e metodo `pix`) enquanto as
+// checagens acima rodavam, e o delete em cascata levaria o vinculo novo junto.
+async function aindaAbandonado(env: Env, tenantId: string, limite: string): Promise<boolean> {
+  const rows = await supabaseSelect<{ tenant_id: string }>(env, 'billing_subscriptions', {
+    tenant_id: `eq.${tenantId}`,
+    status: STATUS_FAXINA,
+    payment_method: 'in.(card,pix_automatic)',
+    asaas_subscription_id: 'is.null',
+    updated_at: `lt.${limite}`,
+    select: 'tenant_id',
+    limit: '1',
+  });
+  return rows.length > 0;
+}
+
 export async function limparCheckoutsAbandonados(
   env: Env,
 ): Promise<{ removidos: number; mantidos: number }> {
@@ -122,7 +142,7 @@ export async function limparCheckoutsAbandonados(
   // updated_at, nao created_at: um vinculo que o operador refez (billing:
   // subscribe) ou que acabou de ser cancelado conta a partir da ultima mudanca.
   const pendentes = await supabaseSelect<PendenteRow>(env, 'billing_subscriptions', {
-    status: 'in.(pending,canceled)',
+    status: STATUS_FAXINA,
     payment_method: 'in.(card,pix_automatic)',
     asaas_subscription_id: 'is.null',
     updated_at: `lt.${limite}`,
@@ -137,7 +157,11 @@ export async function limparCheckoutsAbandonados(
     try {
       // Banco antes do Asaas: tenant com conta ou chave nunca tem nada
       // cancelado.
-      if ((await nuncaValeu(env, p.tenant_id)) && (await encerrarCheckout(env, p))) {
+      if (
+        (await nuncaValeu(env, p.tenant_id)) &&
+        (await encerrarCheckout(env, p)) &&
+        (await aindaAbandonado(env, p.tenant_id, limite))
+      ) {
         await supabaseDelete(env, 'tenants', { id: `eq.${p.tenant_id}` });
         removidos += 1;
         continue;

@@ -94,13 +94,15 @@ function lerLock(valor: string): Ancora | null {
 async function encerrarAnterior(env: Env, anterior: Ancora): Promise<boolean> {
   const linha = await pendentePorAncora(env, anterior);
   if (!linha || !(await encerrarCheckout(env, linha))) return false;
-  await supabaseUpdate(
+  const alterados = await supabaseUpdate<{ tenant_id: string }>(
     env,
     'billing_subscriptions',
     { tenant_id: `eq.${linha.tenant_id}`, status: 'eq.pending' },
     { status: 'canceled', updated_at: new Date().toISOString() },
   );
-  return true;
+  // Nenhuma linha mudou: o webhook ativou esse vinculo no meio do caminho (o
+  // cliente acabou de pagar). Nao abre outro checkout por cima (review F2.27).
+  return alterados.length > 0;
 }
 
 // Sessao do painel do comprador (F2.20). Falha aqui NAO desfaz a venda: a
@@ -184,6 +186,8 @@ checkout.post('/', async (c) => {
   }
 
   const lockKey = `checkout:lock:${await hashApiKey(`${emailNorm}|${documento}`)}`;
+  // Chaves de KV nunca carregam dado pessoal em claro: sempre o hash.
+  const chaveDoc = attemptKey('checkout-doc', await hashApiKey(documento));
   const lockAtual = await kv.get(lockKey);
   if (lockAtual) {
     // Review F2.25 (#5): o mesmo cliente tentando de novo (recarregou a
@@ -192,16 +196,22 @@ checkout.post('/', async (c) => {
     // comprovado sem pagamento, antes de nascer outro. Requisicao ainda em
     // andamento, checkout pago ou sem como conferir: 409.
     const anterior = lerLock(lockAtual);
-    if (!anterior || !(await encerrarAnterior(c.env, anterior).catch(() => false))) {
+    if (!anterior) {
+      return c.json({ error: 'checkout_in_progress' }, 409);
+    }
+    // Review F2.27: quem ja esgotou o teto do dia nao pode matar o checkout
+    // vivo que tem e sair sem nenhum. Confere o teto (sem contar) ANTES.
+    if (Number((await kv.get(chaveDoc)) ?? '0') >= MAX_ATTEMPTS_PER_DOC) {
+      return c.json({ error: 'rate_limited' }, 429);
+    }
+    if (!(await encerrarAnterior(c.env, anterior).catch(() => false))) {
       return c.json({ error: 'checkout_in_progress' }, 409);
     }
   }
 
   // Teto por documento DEPOIS do lock: um 409 nao cria nada e nao consome
-  // tentativa. Tudo o que cria cliente/cobranca e contado. Chaves de KV nunca
-  // carregam dado pessoal em claro: sempre o hash.
-  const docHash = await hashApiKey(documento);
-  const porDoc = await bumpAttempts(kv, attemptKey('checkout-doc', docHash));
+  // tentativa. Tudo o que cria cliente/cobranca e contado.
+  const porDoc = await bumpAttempts(kv, chaveDoc);
   if (porDoc > MAX_ATTEMPTS_PER_DOC) {
     return c.json({ error: 'rate_limited' }, 429);
   }
@@ -331,8 +341,10 @@ checkout.post('/', async (c) => {
       // Sem vinculo a cobranca seria irrecuperavel pelo webhook: cancela a
       // sessao antes que alguem pague (o id nao e segredo; e o fio para
       // reconciliar a mao se o cancelamento tambem falhar).
-      const cancelada = await cancelCardCheckout(c.env, sessao.checkoutId).catch(() => false);
-      console.error(`checkout_orphan_card_session: ${sessao.checkoutId} cancelada=${cancelada}`);
+      const cancelamento = await cancelCardCheckout(c.env, sessao.checkoutId);
+      console.error(
+        `checkout_orphan_card_session: ${sessao.checkoutId} cancelamento=${cancelamento}`,
+      );
       // Sem vinculo a faxina nunca acharia este tenant: sai agora.
       await supabaseDelete(c.env, 'tenants', { id: `eq.${tenantId}` }).catch(() => {
         console.error(`checkout_orphan_tenant: ${tenantId}`);

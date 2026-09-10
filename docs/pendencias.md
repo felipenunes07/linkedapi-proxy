@@ -110,15 +110,25 @@ Atualizado em 2026-09-10.
 - [x] Landing e painel na Vercel com deploy por push; webhooks no painel.
 - [x] Segunda rodada do review adversarial (F2.27): 13 achados corrigidos,
       212 testes verdes (18 arquivos).
+- [x] Verificacao das correcoes (F2.28): 3 confirmados + 2 graves + 8 menores
+      corrigidos, 223 testes verdes (18 arquivos).
 - [ ] Primeira compra real no CARTAO: confirma no real que a 1a cobranca liga
       a sessao ao tenant (pelo payload ou pela busca `GET /payments/{id}`) e
       que a renovacao do mes 2 chega pela assinatura ja gravada.
 - [ ] Cadastrar o site da landing nas informacoes da conta Asaas (campo
       `site` esta vazio). O Asaas usa esse dominio nas URLs de volta do
       checkout de cartao.
-- [ ] Menores deferidos do review F2.27: pepper HMAC nas chaves de throttle
-      do KV (hoje SHA-256 do e-mail/CPF, KV so nosso); estorno nao pausa
-      (decisao consciente, ver F2.27).
+- [ ] Menores deferidos do review F2.27/F2.28: pepper HMAC nas chaves de
+      throttle do KV (hoje SHA-256 do e-mail/CPF, KV so nosso); estorno nao
+      pausa (decisao consciente, ver F2.27); corrida de milissegundos entre
+      `statusAoReativar` e o /hooks/billing (RPC atomica resolveria).
+- [ ] Checkout de cartao com a nossa marca: o hospedado do Asaas mostra a
+      razao social da conta e o layout padrao. Opcoes em avaliacao (ajustar o
+      Asaas ou trocar o provedor do cartao); decisao do dono.
+- [ ] Conta demo `Demo Playbook (teste interno)` (tenant
+      `e3a5a91f-5246-4e04-81c2-1a1481530469`, plano ativo sem cobranca, criada
+      em 2026-09-10 para testar o painel). Apagar quando nao servir mais: ela
+      ocupa 1 seat na contagem.
 - [ ] Remover `linkedapi-site.pages.dev` do CORS depois de 30 dias de
       redirecionamento (e so entao apagar o projeto Pages).
 - [ ] Nome definitivo do produto (hoje "Playbook API", provisorio) e dominio
