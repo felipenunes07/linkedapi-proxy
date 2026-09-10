@@ -122,9 +122,17 @@ Atualizado em 2026-09-10.
       throttle do KV (hoje SHA-256 do e-mail/CPF, KV so nosso); estorno nao
       pausa (decisao consciente, ver F2.27); corrida de milissegundos entre
       `statusAoReativar` e o /hooks/billing (RPC atomica resolveria).
-- [ ] Checkout de cartao com a nossa marca: o hospedado do Asaas mostra a
-      razao social da conta e o layout padrao. Opcoes em avaliacao (ajustar o
-      Asaas ou trocar o provedor do cartao); decisao do dono.
+- [ ] Checkout de cartao com a nossa marca: EM ESPERA (o dono disse em
+      2026-09-10 "nao se preocupe com isso"; o cartao do Asaas segue na
+      landing como esta). Fatos levantados: a conta Asaas so aceita os nomes
+      do CNPJ da FTX ("FTX INSIDE SALES VENDAS DIGITAIS LTDA." ou sem o
+      "LTDA."), sem nome fantasia registrado; logo e cores da conta estao
+      desligados e a doc diz que valem para a fatura; no Pix o banco do
+      cliente tambem mostra a FTX como recebedora; a conta e compartilhada
+      com as outras vendas da FTX. Caminhos quando retomar: conta Asaas num
+      CNPJ da Playbook (resolve o nome no Pix e no cartao) ou Stripe so no
+      cartao com "Playbook API" como nome exibido (igual a Unipile). Pesquisa
+      com fontes em [pesquisa-checkout-cartao.md](pesquisa-checkout-cartao.md).
 - [ ] Conta demo `Demo Playbook (teste interno)` (tenant
       `e3a5a91f-5246-4e04-81c2-1a1481530469`, plano ativo sem cobranca, criada
       em 2026-09-10 para testar o painel). Apagar quando nao servir mais: ela
