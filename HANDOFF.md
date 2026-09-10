@@ -1,4 +1,4 @@
-# HANDOFF, LinkedAPI (proxy Unipile)
+# HANDOFF, Playbook API (proxy Unipile)
 
 Snapshot para quem for tocar o projeto de onde paramos. Atualizado em 2026-09-10.
 
@@ -10,19 +10,27 @@ Snapshot para quem for tocar o projeto de onde paramos. Atualizado em 2026-09-10
 
 Camada proxy sobre a Unipile para automação de LinkedIn. Vendemos "a nossa API"
 em BRL; por baixo roteamos para a Unipile sob uma única conta-mestra. O nome do
-produto é **LinkedAPI** (domínio pretendido `linkedapi.com.br`, ainda não
-registrado).
+produto é **provisório: "Playbook API"** (decidido em 2026-09-10; "LinkedAPI"
+era placeholder e segue só no nome dos repositórios). Contato publicado:
+victor@playbooklab.com.br.
+
+- Landing e painel do cliente: **Vercel**,
+  https://landing-api-linkedin.vercel.app (deploy a cada push no `master` do
+  repo da landing).
+- API: **Cloudflare Workers** na conta do Victor,
+  https://linkedapi-proxy.victor-58a.workers.dev (`npm run deploy`).
 
 Stack: Cloudflare Workers + Hono (TypeScript), Supabase (Postgres + RLS), rate
 limit em Cloudflare KV, docs via Scalar a partir de OpenAPI.
 
 ## Status geral
 
-Todo o código da V1, da fase 2 **e do painel do cliente** está **pronto e
-verde**: typecheck + **174 testes** (16 arquivos), com os diffs revisados pelo
-subagent `security-reviewer`. O que falta é infraestrutura, contas externas e prova
-real: o projeto Supabase antigo sumiu do DNS, o Worker nunca foi deployado, e
-as provas ponta a ponta dependem disso. Lista viva do que está pendente:
+Todo o código da V1, da fase 2, do painel do cliente **e do cartão
+recorrente** está **pronto e verde**: typecheck + **212 testes** (18 arquivos),
+com os diffs revisados pelo subagent `security-reviewer` e por duas rodadas de
+review adversarial no cartão. Banco, Worker, webhooks e landing estão no ar. O
+que falta é prova com dinheiro de verdade e dados da empresa. Lista viva do
+que está pendente:
 [docs/pendencias.md](docs/pendencias.md); o recorte só do que **exige mão
 humana** (logins, contas, gente testando): [ACOES-HUMANAS.md](ACOES-HUMANAS.md).
 
@@ -138,15 +146,16 @@ Os 3 endpoints do proxy: `POST /v1/messages`, `POST /v1/invitations`,
 2. ~~Push dos commits~~ FEITO em 2026-09-10 (PR
    [vzbaggio/linkedapi-proxy#1](https://github.com/vzbaggio/linkedapi-proxy/pull/1)
    atualizado; landing em `felipenunes07/linkedapi-site`).
-3. **Confirmar Pix Automático habilitado** na conta Asaas de produção.
-4. **Uma compra real ponta a ponta** (checkout → Pix → painel → wizard →
-   chave), com um CPF e um LinkedIn da equipe.
-5. **Dados da empresa + revisão jurídica** de termos.html e privacidade.html,
-   e a caixa `contato@linkedapi.com.br`.
-6. **Primeiro cliente real** = evidência final das provas DEFERRED (roteiro de
+3. ~~Confirmar Pix Automático habilitado~~ FEITO em 2026-09-10 (API 200).
+4. **Cadastrar o site da landing na conta Asaas** (Minha Conta > Informações
+   > Site; hoje vazio). O checkout de cartão devolve o cliente para lá.
+5. **Uma compra real no Pix e uma no cartão** (checkout → pagamento → painel
+   → wizard → chave), com um CPF e um LinkedIn da equipe.
+6. **Dados da empresa + revisão jurídica** de termos.html e privacidade.html.
+7. **Primeiro cliente real** = evidência final das provas DEFERRED (roteiro de
    observação em [docs/runbook-primeiro-cliente.md](docs/runbook-primeiro-cliente.md)).
-7. **Registrar `linkedapi.com.br`**, Resend (opcional) e reconectar a conta do
-   Victor.
+8. **Nome definitivo e domínio próprio**, Resend (opcional) e reconectar a
+   conta do Victor.
 
 Já resolvidos desde o snapshot anterior: banco restaurado, deploy no
 workers.dev, provas reais do Marco 5 e do isolamento cross-tenant.

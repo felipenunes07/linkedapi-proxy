@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { Env, Variables } from '../types';
-import { supabaseInsert, supabaseDelete } from '../lib/supabase';
+import { supabaseInsert, supabaseDelete, supabaseUpdate } from '../lib/supabase';
 import { attemptKey, bumpAttempts } from '../lib/throttle';
 import { hashApiKey } from '../lib/hash';
 import { apenasDigitos, documentoValido, emailValido } from '../lib/documento';
@@ -10,19 +10,20 @@ import {
   cancelPixAutomaticAuthorization,
   createCardCheckout,
   cancelCardCheckout,
-  cardCheckoutStatus,
 } from '../lib/asaas';
+import { encerrarCheckout, pendentePorAncora } from '../lib/limpeza';
 import { createPortalToken, seatsInUse, portalUrl } from '../lib/portal';
 
-// Checkout proprio (F2.14, reformulado em F2.18): o cliente assina sem sair da
-// nossa marca, pagando com PIX AUTOMATICO.
+// Checkout proprio (F2.14, reformulado em F2.18 e F2.25): o cliente assina com
+// PIX AUTOMATICO na nossa tela ou com CARTAO RECORRENTE no checkout hospedado
+// do Asaas.
 //
-// Por que so Pix aqui: o Asaas nao oferece tokenizacao de cartao no navegador e
-// exige SAQ-D de quem digita cartao em pagina propria. Pix nao e cartao, entao
-// este caminho fica FORA do escopo PCI, com a nossa marca na tela E com
-// cobranca automatica (o pagador autoriza uma vez no QR e o Asaas debita
-// sozinho nos meses seguintes). Quem prefere cartao vai para um link hospedado
-// pelo Asaas, e nenhum dado de cartao passa por aqui.
+// Por que o cartao nao e digitado aqui: o Asaas nao oferece tokenizacao de
+// cartao no navegador e exige SAQ-D de quem digita cartao em pagina propria.
+// Pix nao e cartao, entao o Pix fica FORA do escopo PCI, com a nossa marca na
+// tela E com cobranca automatica (o pagador autoriza uma vez no QR e o Asaas
+// debita sozinho nos meses seguintes). No cartao so criamos a sessao hospedada;
+// nenhum dado de cartao passa por aqui.
 //
 // Rota PUBLICA que escreve no banco e cria registro financeiro. Camadas (todas
 // vindas do security review; cada uma fecha um abuso real):
@@ -35,6 +36,8 @@ import { createPortalToken, seatsInUse, portalUrl } from '../lib/portal';
 //      hasheado.
 //   4. DOCUMENTO validado por modulo 11: lixo nunca vira tenant nem requisicao.
 //   5. LOCK de idempotencia por e-mail+documento, liberado em toda falha.
+//      Depois da venda criada ele guarda o objeto do Asaas: uma nova tentativa
+//      com os mesmos dados ENCERRA o checkout anterior antes de abrir outro.
 //   6. CAPACIDADE: nao vender seat que a conta-mestra nao tem.
 //   7. ORDEM: cliente (nao cobra) -> tenant -> autorizacao (cobra) -> vinculo.
 //      Se o vinculo falhar, a autorizacao e CANCELADA: cliente cobrado sem
@@ -45,7 +48,9 @@ import { createPortalToken, seatsInUse, portalUrl } from '../lib/portal';
 
 const MAX_ATTEMPTS_PER_IP = 10;
 const MAX_ATTEMPTS_GLOBAL = 60;
-const MAX_ATTEMPTS_PER_DOC = 3;
+// 5 (era 3): cada nova tentativa agora cria uma sessao nova (a anterior e
+// encerrada), e o fluxo legitimo "Pix -> cartao -> voltei do Asaas" ja usa 3.
+const MAX_ATTEMPTS_PER_DOC = 5;
 const LOCK_TTL_SECONDS = 15 * 60;
 const DEFAULT_PRICE_BRL = 57;
 const DEFAULT_SEAT_CAP = 10;
@@ -64,17 +69,38 @@ interface TenantRow {
 // provisorio. O Pix Automatico aceita no maximo 35 caracteres.
 const DESCRICAO_PLANO = 'Plano mensal 1 conta LinkedIn';
 
-// Sessao de cartao vive 60 min no Asaas; o lock acompanha, para reuso.
-const CARD_LOCK_TTL_SECONDS = 60 * 60;
+// Depois da venda criada, o lock guarda o objeto do Asaas pela validade dele
+// (sessao de cartao: 60 min; QR do Pix Automatico: 1h). Formato `card:<id>` ou
+// `pix:<id>`: so ids, nada secreto. O valor '1' e uma requisicao em andamento.
+const ANCORA_LOCK_TTL_SECONDS = 60 * 60;
 
-function lerLockCartao(valor: string): { id: string; url: string } | null {
-  if (!valor.startsWith('card:')) return null;
-  const resto = valor.slice(5);
-  const corte = resto.indexOf('|');
-  if (corte <= 0) return null;
-  const id = resto.slice(0, corte);
-  const url = resto.slice(corte + 1);
-  return url.startsWith('https://') ? { id, url } : null;
+type Ancora = { metodo: 'card' | 'pix_automatic'; id: string };
+
+function lerLock(valor: string): Ancora | null {
+  const corte = valor.indexOf(':');
+  if (corte <= 0 || corte === valor.length - 1) return null;
+  const tipo = valor.slice(0, corte);
+  const id = valor.slice(corte + 1);
+  if (tipo === 'card') return { metodo: 'card', id };
+  if (tipo === 'pix') return { metodo: 'pix_automatic', id };
+  return null;
+}
+
+// Encerra o checkout anterior do MESMO cliente (review F2.25, #5). So devolve
+// true com o objeto do Asaas morto e comprovadamente sem pagamento. O vinculo
+// vira `canceled`: libera o seat na hora e a faxina apaga o tenant em 24h (com
+// as mesmas checagens). Se, por corrida, uma cobranca dele ainda chegar, o
+// /hooks/billing continua achando o tenant pela ancora e ativa.
+async function encerrarAnterior(env: Env, anterior: Ancora): Promise<boolean> {
+  const linha = await pendentePorAncora(env, anterior);
+  if (!linha || !(await encerrarCheckout(env, linha))) return false;
+  await supabaseUpdate(
+    env,
+    'billing_subscriptions',
+    { tenant_id: `eq.${linha.tenant_id}`, status: 'eq.pending' },
+    { status: 'canceled', updated_at: new Date().toISOString() },
+  );
+  return true;
 }
 
 // Sessao do painel do comprador (F2.20). Falha aqui NAO desfaz a venda: a
@@ -160,32 +186,19 @@ checkout.post('/', async (c) => {
   const lockKey = `checkout:lock:${await hashApiKey(`${emailNorm}|${documento}`)}`;
   const lockAtual = await kv.get(lockKey);
   if (lockAtual) {
-    // Cartao (review F2.25, I1): quem volta do Asaas pelo "cancelar" ou
-    // recarrega a pagina REUSA a mesma sessao enquanto ela estiver ativa, em
-    // vez de travar em 409 ou abrir uma segunda assinatura (cobranca dupla).
-    const anterior = metodo === 'card' ? lerLockCartao(lockAtual) : null;
-    if (!anterior) {
+    // Review F2.25 (#5): o mesmo cliente tentando de novo (recarregou a
+    // pagina, voltou do Asaas pelo "cancelar", trocou Pix <-> cartao). Nunca
+    // duas cobrancas vivas: o checkout anterior e ENCERRADO no Asaas, e
+    // comprovado sem pagamento, antes de nascer outro. Requisicao ainda em
+    // andamento, checkout pago ou sem como conferir: 409.
+    const anterior = lerLock(lockAtual);
+    if (!anterior || !(await encerrarAnterior(c.env, anterior).catch(() => false))) {
       return c.json({ error: 'checkout_in_progress' }, 409);
     }
-    const status = await cardCheckoutStatus(c.env, anterior.id).catch(() => null);
-    if (status === 'ACTIVE') {
-      c.header('Cache-Control', 'no-store');
-      return c.json({
-        ok: true,
-        data: { method: 'card', checkout_url: anterior.url, portal: null, reused: true },
-      });
-    }
-    if (status !== 'CANCELED' && status !== 'EXPIRED') {
-      // Paga, ou nao deu para conferir: nunca abrir outra por cima.
-      return c.json({ error: 'checkout_in_progress' }, 409);
-    }
-    // Sessao anterior morreu: segue e cria outra (o tenant antigo, que nunca
-    // pagou, sai na faxina de checkouts abandonados).
   }
 
-  // Teto por documento DEPOIS do reuso acima: voltar do Asaas e reabrir a
-  // mesma sessao nao cria nada e nao pode esgotar as tentativas do cliente.
-  // Tudo o que cria cliente/cobranca continua contado. Chaves de KV nunca
+  // Teto por documento DEPOIS do lock: um 409 nao cria nada e nao consome
+  // tentativa. Tudo o que cria cliente/cobranca e contado. Chaves de KV nunca
   // carregam dado pessoal em claro: sempre o hash.
   const docHash = await hashApiKey(documento);
   const porDoc = await bumpAttempts(kv, attemptKey('checkout-doc', docHash));
@@ -320,14 +333,18 @@ checkout.post('/', async (c) => {
       // reconciliar a mao se o cancelamento tambem falhar).
       const cancelada = await cancelCardCheckout(c.env, sessao.checkoutId).catch(() => false);
       console.error(`checkout_orphan_card_session: ${sessao.checkoutId} cancelada=${cancelada}`);
+      // Sem vinculo a faxina nunca acharia este tenant: sai agora.
+      await supabaseDelete(c.env, 'tenants', { id: `eq.${tenantId}` }).catch(() => {
+        console.error(`checkout_orphan_tenant: ${tenantId}`);
+      });
       await liberarLock();
       return c.json({ error: 'billing_unavailable' }, 502);
     }
 
-    // O lock passa a guardar a sessao (id|url, nada secreto) pela vida dela:
-    // uma nova tentativa com os mesmos dados reusa esta em vez de criar outra.
-    await kv.put(lockKey, `card:${sessao.checkoutId}|${sessao.url}`, {
-      expirationTtl: CARD_LOCK_TTL_SECONDS,
+    // O lock passa a guardar a sessao pela vida dela: uma nova tentativa com
+    // os mesmos dados encerra esta antes de abrir outra.
+    await kv.put(lockKey, `card:${sessao.checkoutId}`, {
+      expirationTtl: ANCORA_LOCK_TTL_SECONDS,
     });
 
     const portalCartao = await criarSessaoDoComprador(c.env, tenantId);
@@ -392,9 +409,16 @@ checkout.post('/', async (c) => {
     console.error(
       `checkout_orphan_authorization: ${authorizationId} cancelada=${cancelada}`,
     );
+    // Sem vinculo a faxina nunca acharia este tenant: sai agora.
+    await supabaseDelete(c.env, 'tenants', { id: `eq.${tenantId}` }).catch(() => {
+      console.error(`checkout_orphan_tenant: ${tenantId}`);
+    });
     await liberarLock();
     return c.json({ error: 'billing_unavailable' }, 502);
   }
+
+  // Mesmo desenho do cartao: o lock guarda a autorizacao pela validade do QR.
+  await kv.put(lockKey, `pix:${authorizationId}`, { expirationTtl: ANCORA_LOCK_TTL_SECONDS });
 
   // Passo 5 (F2.20): token do painel do comprador. A tela do checkout usa para
   // acompanhar o pagamento e abrir o painel (conectar LinkedIn, gerar chave).

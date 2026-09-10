@@ -8,7 +8,10 @@
 set -uo pipefail
 
 BASE="${1:-https://linkedapi-proxy.victor-58a.workers.dev}"
-ORIGEM="https://linkedapi-site.pages.dev"
+# Landing e painel na Vercel (F2.26). O Pages antigo so redireciona, mas segue
+# no CORS por 30 dias (docs/pendencias.md).
+ORIGEM="https://landing-api-linkedin.vercel.app"
+ORIGEM_ANTIGA="https://linkedapi-site.pages.dev"
 falhas=0
 
 confere() {
@@ -46,6 +49,32 @@ confere "POST /checkout com CPF invalido" 400 \
   "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/checkout" \
       -H "Origin: $ORIGEM" -H 'content-type: application/json' \
       -d '{"name":"Smoke Test","email":"smoke@example.com","cpf_cnpj":"111.111.111-11"}')"
+
+# F2.25: metodo de pagamento validado antes de tudo. Worker antigo ignorava o
+# campo e respondia outro erro.
+confere "POST /checkout com metodo invalido" invalid_payment_method \
+  "$(curl -s -X POST "$BASE/checkout" \
+      -H "Origin: $ORIGEM" -H 'content-type: application/json' \
+      -d '{"name":"Smoke Test","email":"smoke@example.com","cpf_cnpj":"111.111.111-11","payment_method":"boleto"}' \
+      | sed -n 's/.*"error":"\([a-z_]*\)".*/\1/p')"
+
+# CORS devolve a origem da Vercel (e so ela) no checkout.
+confere "Access-Control-Allow-Origin da Vercel" "$ORIGEM" \
+  "$(curl -s -o /dev/null -D - -X POST "$BASE/checkout" \
+      -H "Origin: $ORIGEM" -H 'content-type: application/json' -d '{}' \
+      | tr -d '\r' | sed -n 's/^[Aa]ccess-[Cc]ontrol-[Aa]llow-[Oo]rigin: //p')"
+
+# F2.26: webhook configuravel pelo painel (DELETE precisa estar no preflight).
+confere "OPTIONS /portal/webhook (preflight DELETE da Vercel)" 204 \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X OPTIONS "$BASE/portal/webhook" \
+      -H "Origin: $ORIGEM" -H 'Access-Control-Request-Method: DELETE' \
+      -H 'Access-Control-Request-Headers: x-portal-token')"
+
+# Pages antigo ainda aceito enquanto redireciona.
+confere "OPTIONS /portal/status (preflight do Pages antigo)" 204 \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X OPTIONS "$BASE/portal/status" \
+      -H "Origin: $ORIGEM_ANTIGA" -H 'Access-Control-Request-Method: GET' \
+      -H 'Access-Control-Request-Headers: x-portal-token')"
 
 # Chave inexistente continua 401 (F2.22 nao muda nada para quem nao tem chave).
 confere "GET /v1/chats com chave inexistente" 401 \

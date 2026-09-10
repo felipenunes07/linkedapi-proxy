@@ -268,8 +268,9 @@ app.route('/v1', v1);
 export default Object.assign(app, {
   scheduled: async (_event: ScheduledController, env: Env, ctx: ExecutionContext) => {
     ctx.waitUntil(
-      limparCheckoutsAbandonados(env).catch(() => {
-        console.error('limpeza_falhou');
+      limparCheckoutsAbandonados(env).catch((err: unknown) => {
+        // So o codigo interno (supabase_*_failed:<status>, asaas_*): sem segredo.
+        console.error(`limpeza_falhou: ${err instanceof Error ? err.message : 'erro'}`);
       }),
     );
   },

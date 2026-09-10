@@ -143,7 +143,17 @@ vi.mock('../src/lib/email', () => ({
   sendEmail: vi.fn(async () => true),
 }));
 
+vi.mock('../src/lib/asaas', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../src/lib/asaas')>()),
+  // Consultas ao Asaas (review F2.25): por padrao "sem resposta" (null), o
+  // caminho em que o evento autenticado vale sozinho.
+  getPayment: vi.fn(async () => null),
+  listPayments: vi.fn(async () => null),
+  enableCustomerNotifications: vi.fn(async () => true),
+}));
+
 import app from '../src/index';
+import { getPayment, listPayments } from '../src/lib/asaas';
 import { deliverWebhook } from '../src/lib/webhooks';
 import { sendEmail } from '../src/lib/email';
 import { createHostedAuthLink, getAccount } from '../src/lib/unipile';
@@ -182,6 +192,8 @@ beforeEach(() => {
   vi.mocked(sendEmail).mockClear();
   vi.mocked(createHostedAuthLink).mockClear();
   vi.mocked(getAccount).mockReset();
+  vi.mocked(getPayment).mockReset().mockResolvedValue(null);
+  vi.mocked(listPayments).mockReset().mockResolvedValue(null);
   // Default: a origem confirma que a sessao caiu (status != OK).
   vi.mocked(getAccount).mockResolvedValue(
     new Response(JSON.stringify({ sources: [{ status: 'CREDENTIALS' }] }), {
@@ -274,6 +286,20 @@ describe('POST /hooks/account-status', () => {
     expect(db.accounts[1]?.status).toBe('active');
     await vi.waitFor(() => expect(deliverWebhook).toHaveBeenCalledTimes(1));
     expect(vi.mocked(deliverWebhook).mock.calls[0]![2]).toBe('account.reconnected');
+  });
+
+  it('#3: sessao voltou com a assinatura em atraso: vira paused, nunca active', async () => {
+    db.tenants.tB = { webhook_url: 'https://b.example/hook', webhook_secret: 's' };
+    db.billing.push({ tenant_id: 'tB', asaas_subscription_id: 'sub_B', status: 'overdue' });
+    const res = await post(
+      '/hooks/account-status',
+      { AccountStatus: { account_id: 'ua-2', message: 'OK' } },
+      { 'x-hook-secret': STATUS_SECRET },
+    );
+    expect(res.status).toBe(200);
+    expect(db.accounts[1]?.status).toBe('paused');
+    await new Promise((r) => setTimeout(r, 10));
+    expect(deliverWebhook).not.toHaveBeenCalled();
   });
 
   it('conta pausada (billing) NAO muda por status de sessao', async () => {
@@ -482,7 +508,7 @@ describe('POST /hooks/billing', () => {
     });
   });
 
-  it('F2.25 cartao: CHECKOUT_PAID tambem ativa pela sessao', async () => {
+  it('F2.25 cartao: CHECKOUT_PAID ativa pela sessao e grava a assinatura da cobranca dela', async () => {
     db.tenants.tCard2 = { webhook_url: null, webhook_secret: null };
     db.billing.push({
       tenant_id: 'tCard2',
@@ -492,15 +518,134 @@ describe('POST /hooks/billing', () => {
       payment_method: 'card',
       status: 'pending',
     });
+    vi.mocked(listPayments).mockImplementation(async (_env, filtro) =>
+      filtro.checkoutSession === 'chk_10'
+        ? [
+            {
+              id: 'pay_10',
+              status: 'CONFIRMED',
+              subscription: 'sub_card_10',
+              customer: 'cus_10',
+              checkoutSession: 'chk_10',
+            },
+          ]
+        : [],
+    );
     await post(
       '/hooks/billing',
       { event: 'CHECKOUT_PAID', checkout: { id: 'chk_10', customer: 'cus_10', status: 'PAID' } },
       { 'asaas-access-token': ASAAS_TOKEN },
     );
+    // Sem a assinatura gravada, a cobranca do mes 2 nao acharia o tenant.
     expect(db.billing.find((b) => b.tenant_id === 'tCard2')).toMatchObject({
       status: 'active',
       asaas_customer_id: 'cus_10',
+      asaas_subscription_id: 'sub_card_10',
     });
+  });
+
+  it('#2 cartao: cobranca sem checkoutSession no payload acha a sessao pelo Asaas', async () => {
+    db.tenants.tCard3 = { webhook_url: null, webhook_secret: null };
+    db.billing.push({
+      tenant_id: 'tCard3',
+      asaas_subscription_id: null,
+      asaas_customer_id: null,
+      asaas_checkout_id: 'chk_11',
+      payment_method: 'card',
+      status: 'pending',
+    });
+    vi.mocked(getPayment).mockResolvedValue({
+      id: 'pay_11',
+      status: 'CONFIRMED',
+      subscription: 'sub_card_11',
+      customer: 'cus_11',
+      checkoutSession: 'chk_11',
+    });
+    const res = await post(
+      '/hooks/billing',
+      {
+        event: 'PAYMENT_CONFIRMED',
+        payment: { id: 'pay_11', subscription: 'sub_card_11', customer: 'cus_11', billingType: 'CREDIT_CARD' },
+      },
+      { 'asaas-access-token': ASAAS_TOKEN },
+    );
+    expect(await res.json()).toEqual({ ok: true });
+    expect(getPayment).toHaveBeenCalledWith(expect.anything(), 'pay_11');
+    expect(db.billing.find((b) => b.tenant_id === 'tCard3')).toMatchObject({
+      status: 'active',
+      asaas_subscription_id: 'sub_card_11',
+      asaas_customer_id: 'cus_11',
+    });
+  });
+
+  it('#1 cartao: a liquidacao (PAYMENT_RECEIVED) nunca desfaz a pausa de um atraso posterior', async () => {
+    await post(
+      '/hooks/billing',
+      { event: 'PAYMENT_OVERDUE', payment: { id: 'pay_mes2', subscription: 'sub_A', billingType: 'CREDIT_CARD' } },
+      { 'asaas-access-token': ASAAS_TOKEN },
+    );
+    expect(db.accounts[0]?.status).toBe('paused');
+    const res = await post(
+      '/hooks/billing',
+      { event: 'PAYMENT_RECEIVED', payment: { id: 'pay_mes1', subscription: 'sub_A', billingType: 'CREDIT_CARD' } },
+      { 'asaas-access-token': ASAAS_TOKEN },
+    );
+    expect(await res.json()).toEqual({ ok: true, ignored: true });
+    expect(db.accounts[0]?.status).toBe('paused');
+    expect(db.billing[0]?.status).toBe('overdue');
+  });
+
+  it('#1: confirmacao atrasada com OUTRA cobranca vencida na assinatura: continua pausado', async () => {
+    vi.mocked(listPayments).mockImplementation(async (_env, filtro) =>
+      filtro.subscription === 'sub_C' && filtro.status === 'OVERDUE'
+        ? [{ id: 'pay_mes2', status: 'OVERDUE', subscription: 'sub_C', customer: null, checkoutSession: null }]
+        : [],
+    );
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await post(
+      '/hooks/billing',
+      { event: 'PAYMENT_CONFIRMED', payment: { id: 'pay_mes1', subscription: 'sub_C' } },
+      { 'asaas-access-token': ASAAS_TOKEN },
+    );
+    expect(await res.json()).toEqual({ ok: true, ignored: true });
+    expect(db.accounts[2]?.status).toBe('paused');
+    expect(db.billing[1]?.status).toBe('overdue');
+    expect(errSpy.mock.calls.map((c) => String(c[0]))).toContain('billing_still_overdue: tC');
+    errSpy.mockRestore();
+  });
+
+  it('#1: atraso de uma cobranca que no Asaas ja foi paga (evento velho) nao pausa', async () => {
+    vi.mocked(getPayment).mockResolvedValue({
+      id: 'pay_A1',
+      status: 'RECEIVED',
+      subscription: 'sub_A',
+      customer: null,
+      checkoutSession: null,
+    });
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await post(
+      '/hooks/billing',
+      { event: 'PAYMENT_OVERDUE', payment: { id: 'pay_A1', subscription: 'sub_A' } },
+      { 'asaas-access-token': ASAAS_TOKEN },
+    );
+    expect(await res.json()).toEqual({ ok: true, ignored: true });
+    expect(getPayment).toHaveBeenCalledWith(expect.anything(), 'pay_A1');
+    expect(db.accounts[0]?.status).toBe('active');
+    expect(db.billing[0]?.status).toBe('active');
+    errSpy.mockRestore();
+  });
+
+  it('contestacao do cartao (chargeback) pausa como atraso', async () => {
+    await post(
+      '/hooks/billing',
+      {
+        event: 'PAYMENT_CHARGEBACK_REQUESTED',
+        payment: { id: 'pay_cb', subscription: 'sub_A', billingType: 'CREDIT_CARD' },
+      },
+      { 'asaas-access-token': ASAAS_TOKEN },
+    );
+    expect(db.accounts[0]?.status).toBe('paused');
+    expect(db.billing[0]?.status).toBe('overdue');
   });
 
   it('B1: cliente de um tenant de CARTAO nunca serve de ancora (assinatura alheia nao pausa ninguem)', async () => {

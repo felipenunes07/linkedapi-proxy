@@ -1,6 +1,6 @@
 # Acoes humanas (o que SO uma pessoa pode fazer para o projeto avancar)
 
-Todo o codigo esta pronto, testado (199 testes) e revisado. Este arquivo lista
+Todo o codigo esta pronto, testado (212 testes) e revisado. Este arquivo lista
 APENAS o que precisa de mao humana. Os comandos de deploy estao em
 [docs/go-live.md](docs/go-live.md) (secoes H e I).
 
@@ -18,6 +18,11 @@ Onde fica cada coisa:
 
 ## 1. Provar com dinheiro de verdade
 
+- **Antes da compra no cartao: cadastrar o site na conta Asaas.** No painel
+  do Asaas, Minha Conta > Informacoes > Site:
+  `https://landing-api-linkedin.vercel.app` (hoje o campo esta vazio). O
+  checkout de cartao devolve o cliente para esse dominio depois do
+  pagamento. E dado cadastral da empresa, por isso fica com voces.
 - **Uma compra no Pix e uma no cartao** (R$ 57 cada), com CPF e LinkedIn da
   equipe: checkout -> pagamento -> painel -> conectar LinkedIn -> gerar chave.
   E a unica prova ponta a ponta do fluxo inteiro. No cartao, conferir no mes

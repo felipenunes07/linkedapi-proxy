@@ -20,9 +20,27 @@ let contasAtivas: { id: string; tenant_id?: string }[] = [];
 let pendentesRecentes: { tenant_id: string }[] = [];
 let filtroPendentes: Record<string, string> | null = null;
 
+// Vinculos gravados pelo checkout: o "banco" dos testes de nova tentativa.
+const vinculos = () =>
+  inserted.filter((i) => i.table === 'billing_subscriptions').map((i) => i.row);
+
 vi.mock('../src/lib/supabase', () => ({
   supabaseSelect: vi.fn(async (_env: Env, table: string, filters: Record<string, string>) => {
     if (table === 'connected_accounts') return contasAtivas;
+    if (
+      table === 'billing_subscriptions' &&
+      (filters.asaas_checkout_id || filters.asaas_authorization_id)
+    ) {
+      // Busca do checkout anterior pela ancora guardada no lock.
+      return vinculos().filter(
+        (r) =>
+          (!filters.asaas_checkout_id ||
+            `eq.${r.asaas_checkout_id}` === filters.asaas_checkout_id) &&
+          (!filters.asaas_authorization_id ||
+            `eq.${r.asaas_authorization_id}` === filters.asaas_authorization_id) &&
+          `eq.${r.status}` === filters.status,
+      );
+    }
     if (table === 'billing_subscriptions' && filters.status === 'eq.pending') {
       filtroPendentes = filters;
       return pendentesRecentes;
@@ -34,7 +52,23 @@ vi.mock('../src/lib/supabase', () => ({
     if (table === 'tenants') return [{ id: TENANT_ID }];
     return [row];
   }),
-  supabaseUpdate: vi.fn(async () => []),
+  supabaseUpdate: vi.fn(
+    async (
+      _env: Env,
+      table: string,
+      filters: Record<string, string>,
+      patch: Record<string, unknown>,
+    ) => {
+      if (table !== 'billing_subscriptions') return [];
+      const alvo = vinculos().filter(
+        (r) =>
+          `eq.${r.tenant_id}` === filters.tenant_id &&
+          (!filters.status || `eq.${r.status}` === filters.status),
+      );
+      for (const r of alvo) Object.assign(r, patch);
+      return alvo;
+    },
+  ),
   supabaseDelete: vi.fn(async () => undefined),
   supabaseRpc: vi.fn(async () => undefined),
 }));
@@ -55,7 +89,9 @@ vi.mock('../src/lib/asaas', () => ({
     url: 'https://asaas.com/checkoutSession/show?id=chk_123',
   })),
   cancelCardCheckout: vi.fn(async () => true),
-  cardCheckoutStatus: vi.fn(async () => 'ACTIVE'),
+  // Checkout anterior (nova tentativa): sem cobranca e QR ainda nao autorizado.
+  listPayments: vi.fn(async () => []),
+  pixAutomaticAuthorizationStatus: vi.fn(async () => 'CREATED'),
 }));
 
 import app from '../src/index';
@@ -65,9 +101,11 @@ import {
   cancelPixAutomaticAuthorization,
   createCardCheckout,
   cancelCardCheckout,
-  cardCheckoutStatus,
+  listPayments,
+  pixAutomaticAuthorizationStatus,
 } from '../src/lib/asaas';
 import { supabaseInsert, supabaseDelete } from '../src/lib/supabase';
+import { hashApiKey } from '../src/lib/hash';
 
 function baseEnv(overrides: Partial<Env> = {}): Env {
   return {
@@ -312,46 +350,60 @@ describe('POST /checkout, cartao recorrente no checkout hospedado (F2.25)', () =
     });
   });
 
-  it('I1: nova tentativa com os mesmos dados REUSA a sessao ativa (sem 2a cobranca)', async () => {
+  it('#5: nova tentativa ENCERRA a sessao anterior (sem pagamento) e abre outra', async () => {
     const env = envCartao();
     const primeira = await post({ ...BODY_OK, payment_method: 'card' }, env);
     expect(primeira.status).toBe(200);
     const segunda = await post({ ...BODY_OK, payment_method: 'card' }, env);
     expect(segunda.status).toBe(200);
     const body = (await segunda.json()) as { data: Record<string, unknown> };
-    expect(body.data).toMatchObject({
-      method: 'card',
-      checkout_url: 'https://asaas.com/checkoutSession/show?id=chk_123',
-      reused: true,
-      portal: null,
-    });
-    expect(createCardCheckout).toHaveBeenCalledTimes(1);
-    expect(cardCheckoutStatus).toHaveBeenCalledWith(expect.anything(), 'chk_123');
+    // Sessao nova com painel proprio: nada de reaproveitar uma URL que o
+    // cliente pode ter cancelado na pagina do Asaas.
+    expect(body.data).toMatchObject({ method: 'card', portal: { token: expect.any(String) } });
+    expect(createCardCheckout).toHaveBeenCalledTimes(2);
+    expect(cancelCardCheckout).toHaveBeenCalledWith(expect.anything(), 'chk_123');
+    expect(listPayments).toHaveBeenCalledWith(expect.anything(), { checkoutSession: 'chk_123' }, 1);
+    // O vinculo anterior sai do "pendente" (libera o seat) e o novo nasce pendente.
+    expect(vinculos().map((v) => v.status)).toEqual(['canceled', 'pending']);
   });
 
-  it('I1: sessao anterior cancelada no Asaas -> cria outra; paga/indefinida -> 409', async () => {
+  it('#5: sessao anterior com cobranca, ou sem como conferir: 409 e nada novo', async () => {
     const env = envCartao();
     await post({ ...BODY_OK, payment_method: 'card' }, env);
-    vi.mocked(cardCheckoutStatus).mockResolvedValueOnce('CANCELED');
-    const nova = await post({ ...BODY_OK, payment_method: 'card' }, env);
-    expect(nova.status).toBe(200);
-    expect(createCardCheckout).toHaveBeenCalledTimes(2);
-
-    vi.mocked(cardCheckoutStatus).mockResolvedValueOnce('PAID');
+    vi.mocked(listPayments).mockResolvedValueOnce([
+      { id: 'pay_1', status: 'CONFIRMED', subscription: 'sub_1', customer: 'cus_1', checkoutSession: 'chk_123' },
+    ]);
     const paga = await post({ ...BODY_OK, payment_method: 'card' }, env);
     expect(paga.status).toBe(409);
-    vi.mocked(cardCheckoutStatus).mockResolvedValueOnce(null);
+    vi.mocked(listPayments).mockResolvedValueOnce(null);
     const indefinida = await post({ ...BODY_OK, payment_method: 'card' }, env);
     expect(indefinida.status).toBe(409);
-    expect(createCardCheckout).toHaveBeenCalledTimes(2);
+    expect(createCardCheckout).toHaveBeenCalledTimes(1);
+    expect(vinculos().map((v) => v.status)).toEqual(['pending']);
   });
 
-  it('falha ao gravar o vinculo CANCELA a sessao de cartao antes que alguem pague', async () => {
+  it('#5: trocar de Pix para cartao cancela a autorizacao pendente antes', async () => {
+    const env = envCartao();
+    await post(BODY_OK, env);
+    const cartao = await post({ ...BODY_OK, payment_method: 'card' }, env);
+    expect(cartao.status).toBe(200);
+    expect(listPayments).toHaveBeenCalledWith(expect.anything(), { customer: 'cus_123' }, 10);
+    expect(cancelPixAutomaticAuthorization).toHaveBeenCalledWith(expect.anything(), 'auth_123');
+    expect(vinculos().map((v) => [v.payment_method, v.status])).toEqual([
+      ['pix_automatic', 'canceled'],
+      ['card', 'pending'],
+    ]);
+  });
+
+  it('falha ao gravar o vinculo CANCELA a sessao de cartao e remove o tenant orfao', async () => {
     vi.mocked(supabaseInsert).mockImplementationOnce(async () => [{ id: TENANT_ID }]);
     vi.mocked(supabaseInsert).mockRejectedValueOnce(new Error('supabase_insert_failed:500'));
     const res = await post({ ...BODY_OK, payment_method: 'card' }, envCartao());
     expect(res.status).toBe(502);
     expect(cancelCardCheckout).toHaveBeenCalledWith(expect.anything(), 'chk_123');
+    expect(supabaseDelete).toHaveBeenCalledWith(expect.anything(), 'tenants', {
+      id: `eq.${TENANT_ID}`,
+    });
   });
 
   it('Asaas recusou a sessao: 502, tenant orfao removido, nada cobrado', async () => {
@@ -396,6 +448,10 @@ describe('POST /checkout, falhas e abusos', () => {
     // O id da autorizacao fica no log para reconciliacao manual.
     const linhas = errorSpy.mock.calls.map((c) => String(c[0]));
     expect(linhas.some((l) => l.includes('checkout_orphan_authorization'))).toBe(true);
+    // Sem vinculo a faxina nunca acharia o tenant: sai na hora.
+    expect(supabaseDelete).toHaveBeenCalledWith(expect.anything(), 'tenants', {
+      id: `eq.${TENANT_ID}`,
+    });
   });
 
   it('F2.20: falha ao criar o token do painel NAO desfaz a venda', async () => {
@@ -431,20 +487,42 @@ describe('POST /checkout, falhas e abusos', () => {
     expect(Date.now() - desde).toBeLessThan(65 * 60 * 1000);
   });
 
-  it('I1: segunda tentativa do mesmo cliente esbarra no lock (409)', async () => {
+  it('I1: Pix ja autorizado, ou sem resposta do Asaas: nova tentativa esbarra no lock (409)', async () => {
     const env = baseEnv();
     const primeira = await post(BODY_OK, env);
     expect(primeira.status).toBe(200);
+    vi.mocked(pixAutomaticAuthorizationStatus).mockResolvedValueOnce('ACTIVE');
     const segunda = await post(BODY_OK, env);
     expect(segunda.status).toBe(409);
     expect(await segunda.json()).toEqual({ error: 'checkout_in_progress' });
+    vi.mocked(pixAutomaticAuthorizationStatus).mockResolvedValueOnce(null);
+    expect((await post(BODY_OK, env)).status).toBe(409);
     expect(vi.mocked(createPixAutomaticAuthorization).mock.calls).toHaveLength(1);
+    expect(cancelPixAutomaticAuthorization).not.toHaveBeenCalled();
+  });
+
+  it('I1: QR ainda nao autorizado: nova tentativa cancela o anterior e gera outro', async () => {
+    const env = baseEnv();
+    await post(BODY_OK, env);
+    const segunda = await post(BODY_OK, env);
+    expect(segunda.status).toBe(200);
+    expect(cancelPixAutomaticAuthorization).toHaveBeenCalledWith(expect.anything(), 'auth_123');
+    expect(vi.mocked(createPixAutomaticAuthorization).mock.calls).toHaveLength(2);
+  });
+
+  it('requisicao ainda em andamento para os mesmos dados: 409 sem tocar no Asaas', async () => {
+    const env = baseEnv();
+    const chave = `checkout:lock:${await hashApiKey('maria@example.com|52998224725')}`;
+    await env.RATE_LIMIT.put(chave, '1');
+    const res = await post(BODY_OK, env);
+    expect(res.status).toBe(409);
+    expect(createCustomer).not.toHaveBeenCalled();
   });
 
   it('I2: teto por documento corta a enumeracao mesmo trocando de IP', async () => {
     const env = baseEnv();
     // Mesmo documento, e-mails e IPs diferentes (escapa do lock e do teto/IP).
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 5; i++) {
       const res = await post(corpo({ email: `p${i}@example.com` }), env, {
         ip: `1.2.3.${i}`,
       });

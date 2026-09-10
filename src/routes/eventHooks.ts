@@ -7,7 +7,13 @@ import { asRecord, pickString } from '../lib/sanitize';
 import { getAccount } from '../lib/unipile';
 import { createConnectLink, enviarBoasVindas } from '../lib/portal';
 import { deliverWebhook } from '../lib/webhooks';
-import { enableCustomerNotifications } from '../lib/asaas';
+import {
+  enableCustomerNotifications,
+  getPayment,
+  listPayments,
+  STATUS_PAGOS,
+} from '../lib/asaas';
+import { statusAoReativar } from '../lib/billing';
 import { fireAndForget } from '../lib/async';
 import { attemptKey, bumpAttempts } from '../lib/throttle';
 
@@ -226,15 +232,20 @@ eventHooks.post('/account-status', async (c) => {
       });
     });
   } else if (UP_STATUSES.has(message) && account.status === 'disconnected') {
+    // A sessao voltou, mas a inadimplencia continua valendo: conta que estava
+    // desconectada no dia do atraso nao escapa da pausa (review F2.25, #3).
+    const novo = await statusAoReativar(c.env, account.tenant_id);
     await supabaseUpdate(
       c.env,
       'connected_accounts',
       { id: `eq.${account.id}`, status: 'eq.disconnected' },
-      { status: 'active' },
+      { status: novo },
     );
-    fireAndForget(c, () =>
-      notifyTenant(c.env, account.tenant_id, 'account.reconnected', {}),
-    );
+    if (novo === 'active') {
+      fireAndForget(c, () =>
+        notifyTenant(c.env, account.tenant_id, 'account.reconnected', {}),
+      );
+    }
   }
 
   return c.json({ ok: true });
@@ -288,10 +299,11 @@ eventHooks.post('/message-received', async (c) => {
 });
 
 // Eventos de pagamento -> status da assinatura + pausa/despausa das contas.
-// CHECKOUT_PAID (F2.25): o checkout de cartao foi pago. Segunda ancora do
-// cartao, alem de payment.checkoutSession nas cobrancas.
+// CHECKOUT_PAID (F2.25): o checkout de cartao foi pago.
+// PAYMENT_CHARGEBACK_REQUESTED (review F2.25): o pagador contestou a cobranca
+// do cartao. Mesma regra do atraso: pausa, nunca deleta.
 const BILLING_ACTIVE_EVENTS = new Set(['PAYMENT_CONFIRMED', 'PAYMENT_RECEIVED', 'CHECKOUT_PAID']);
-const BILLING_OVERDUE_EVENTS = new Set(['PAYMENT_OVERDUE']);
+const BILLING_OVERDUE_EVENTS = new Set(['PAYMENT_OVERDUE', 'PAYMENT_CHARGEBACK_REQUESTED']);
 
 eventHooks.post('/billing', async (c) => {
   const denied = await gate(c, 'asaas-access-token', c.env.ASAAS_HOOK_TOKEN);
@@ -309,17 +321,27 @@ eventHooks.post('/billing', async (c) => {
   // fornece CHAVES DE BUSCA; a identidade do tenant vem sempre do nosso banco.
   const payment = asRecord(raiz.payment);
   const checkout = asRecord(raiz.checkout);
-  const subscriptionId = pickString(payment, 'subscription');
-  const customerId = pickString(payment, 'customer') ?? pickString(checkout, 'customer');
+  const paymentId = pickString(payment, 'id');
+  const cartao = pickString(payment, 'billingType') === 'CREDIT_CARD';
+  let subscriptionId = pickString(payment, 'subscription');
+  let customerId = pickString(payment, 'customer') ?? pickString(checkout, 'customer');
   // Cartao (F2.25): a ancora e a sessao de checkout que NOS criamos. Vem em
-  // payment.checkoutSession e, no CHECKOUT_PAID, em checkout.id.
-  const checkoutSession =
+  // payment.checkoutSession (quando o Asaas manda) e, no CHECKOUT_PAID, em
+  // checkout.id. Sem ela no payload, e buscada no Asaas mais abaixo.
+  let checkoutSession =
     pickString(payment, 'checkoutSession') ??
     (event === 'CHECKOUT_PAID' ? pickString(checkout, 'id') : undefined);
 
+  // Review F2.25 (#1): no cartao, PAYMENT_RECEIVED e so a LIQUIDACAO (~30 dias
+  // depois) de uma cobranca que ja chegou como CONFIRMED e ja ativou. Se
+  // valesse, a liquidacao do mes 1 desfaria a pausa de um atraso do mes 2.
+  if (event === 'PAYMENT_RECEIVED' && cartao) {
+    return c.json({ ok: true, ignored: true });
+  }
+
   const goesActive = BILLING_ACTIVE_EVENTS.has(event);
   const goesOverdue = BILLING_OVERDUE_EVENTS.has(event);
-  const chave = checkoutSession ?? subscriptionId ?? customerId;
+  const chave = checkoutSession ?? subscriptionId ?? customerId ?? paymentId;
   if ((!goesActive && !goesOverdue) || !chave) {
     return c.json({ ok: true, ignored: true });
   }
@@ -349,16 +371,39 @@ eventHooks.post('/billing', async (c) => {
   if (!sub && subscriptionId) {
     sub = await buscar({ asaas_subscription_id: `eq.${subscriptionId}` });
   }
-  if (!sub && customerId) {
+  if (!sub && customerId && !cartao) {
     sub = await buscar({
       asaas_customer_id: `eq.${customerId}`,
       payment_method: 'eq.pix_automatic',
     });
   }
+  // Review F2.25 (#2): checkoutSession nao esta no payload DOCUMENTADO do
+  // webhook. Cobranca que nao casou com nada: pergunta ao Asaas de qual sessao
+  // ela veio (objeto oficial da cobranca, pelo id do evento ja autenticado).
+  if (!sub && paymentId && !checkoutSession) {
+    const real = await getPayment(c.env, paymentId).catch(() => null);
+    if (real?.checkoutSession) {
+      checkoutSession = real.checkoutSession;
+      sub = await buscar({ asaas_checkout_id: `eq.${real.checkoutSession}` });
+      subscriptionId ??= real.subscription;
+      customerId ??= real.customer;
+    }
+  }
   if (!sub) {
     // Assinatura que nao conhecemos: confirma e sinaliza (sem ids no log).
     console.error('billing_unknown_subscription');
     return c.json({ ok: true, ignored: true });
+  }
+
+  // CHECKOUT_PAID traz so a sessao: assinatura e cliente vem da cobranca que
+  // ela gerou (sem eles, o mes 2 do cartao nao acharia o tenant).
+  if (event === 'CHECKOUT_PAID' && checkoutSession && (!subscriptionId || !customerId)) {
+    const cobrancas = await listPayments(c.env, { checkoutSession }, 1).catch(() => null);
+    const primeira = cobrancas?.[0];
+    if (primeira) {
+      subscriptionId ??= primeira.subscription;
+      customerId ??= primeira.customer;
+    }
   }
 
   // Nunca SOBRESCREVER o vinculo: uma assinatura diferente da ja gravada e
@@ -391,6 +436,34 @@ eventHooks.post('/billing', async (c) => {
       { tenant_id: `eq.${sub.tenant_id}`, asaas_customer_id: 'is.null' },
       { asaas_customer_id: customerId },
     );
+  }
+
+  // Review F2.25 (#1, ordem): o Asaas entrega em fila e reentrega; um evento
+  // velho nunca vence o estado atual da cobranca.
+  if (event === 'PAYMENT_OVERDUE' && paymentId) {
+    // Atraso de uma cobranca que, no Asaas, ja foi paga: evento velho.
+    const atual = await getPayment(c.env, paymentId).catch(() => null);
+    if (atual && STATUS_PAGOS.has(atual.status)) {
+      console.error(`billing_overdue_stale: ${sub.tenant_id}`);
+      return c.json({ ok: true, ignored: true });
+    }
+  }
+  if (goesActive) {
+    // Pagamento de uma cobranca enquanto OUTRA da mesma assinatura segue
+    // vencida (ex.: confirmacao atrasada do mes 1 depois do atraso do mes 2):
+    // continua pausado. Asaas sem resposta: vale o evento (ele e autenticado).
+    const assinatura = subscriptionId ?? sub.asaas_subscription_id ?? undefined;
+    if (assinatura) {
+      const vencidas = await listPayments(
+        c.env,
+        { subscription: assinatura, status: 'OVERDUE' },
+        1,
+      ).catch(() => null);
+      if (vencidas && vencidas.length > 0) {
+        console.error(`billing_still_overdue: ${sub.tenant_id}`);
+        return c.json({ ok: true, ignored: true });
+      }
+    }
   }
   await supabaseUpdate(
     c.env,

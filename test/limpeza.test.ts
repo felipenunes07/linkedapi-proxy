@@ -1,13 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Env } from '../src/types';
 
-// Faxina de checkouts abandonados (review F2.25, I1). So apaga o que nunca
-// valeu: pendente ha mais de 24h, sem conta, sem chave, e com o objeto do Asaas
-// comprovadamente morto (ou cancelado agora). Na duvida, mantem.
+// Faxina de checkouts abandonados (review F2.25, 2a rodada). So apaga o que
+// nunca valeu: vinculo parado ha mais de 24h, sem assinatura, sem conta, sem
+// chave, com o objeto do Asaas morto e sem cobranca com dinheiro. Na duvida,
+// mantem (e o item vai para o fim da fila).
 
 let pendentes: Array<Record<string, unknown>> = [];
 let comConta = new Set<string>();
 let comChave = new Set<string>();
+let falhaNaConta = new Set<string>();
 let filtroPendentes: Record<string, string> | null = null;
 
 vi.mock('../src/lib/supabase', () => ({
@@ -17,94 +19,153 @@ vi.mock('../src/lib/supabase', () => ({
       filtroPendentes = filters;
       return pendentes;
     }
-    if (table === 'connected_accounts') return comConta.has(tenant) ? [{ id: 'ca' }] : [];
+    if (table === 'connected_accounts') {
+      if (falhaNaConta.has(tenant)) throw new Error('supabase_select_failed:503');
+      return comConta.has(tenant) ? [{ id: 'ca' }] : [];
+    }
     if (table === 'api_keys') return comChave.has(tenant) ? [{ id: 'k' }] : [];
     return [];
   }),
   supabaseDelete: vi.fn(async () => undefined),
+  supabaseUpdate: vi.fn(async () => []),
 }));
 
 vi.mock('../src/lib/asaas', () => ({
-  cardCheckoutStatus: vi.fn(async () => 'EXPIRED'),
-  cancelCardCheckout: vi.fn(async () => true),
+  // Sessao de cartao com 24h ja venceu: o cancelamento e recusado.
+  cancelCardCheckout: vi.fn(async () => false),
+  listPayments: vi.fn(async () => []),
   pixAutomaticAuthorizationStatus: vi.fn(async () => 'EXPIRED'),
   cancelPixAutomaticAuthorization: vi.fn(async () => true),
 }));
 
 import { limparCheckoutsAbandonados } from '../src/lib/limpeza';
-import { supabaseDelete } from '../src/lib/supabase';
+import { supabaseDelete, supabaseUpdate } from '../src/lib/supabase';
 import {
-  cardCheckoutStatus,
   cancelCardCheckout,
+  cancelPixAutomaticAuthorization,
+  listPayments,
   pixAutomaticAuthorizationStatus,
 } from '../src/lib/asaas';
 
 const env = { ASAAS_API_KEY: 'k' } as Env;
 
-function cartao(tenant: string, checkout = `chk_${tenant}`) {
-  return { tenant_id: tenant, payment_method: 'card', asaas_checkout_id: checkout, asaas_authorization_id: null };
+function cartao(tenant: string) {
+  return {
+    tenant_id: tenant,
+    payment_method: 'card',
+    asaas_customer_id: null,
+    asaas_checkout_id: `chk_${tenant}`,
+    asaas_authorization_id: null,
+  };
 }
 function pix(tenant: string) {
-  return { tenant_id: tenant, payment_method: 'pix_automatic', asaas_checkout_id: null, asaas_authorization_id: `auth_${tenant}` };
+  return {
+    tenant_id: tenant,
+    payment_method: 'pix_automatic',
+    asaas_customer_id: `cus_${tenant}`,
+    asaas_checkout_id: null,
+    asaas_authorization_id: `auth_${tenant}`,
+  };
 }
+function cobranca(status: string, checkoutSession: string | null = null) {
+  return { id: 'pay', status, subscription: null, customer: null, checkoutSession };
+}
+const apagados = () =>
+  vi.mocked(supabaseDelete).mock.calls.map((c) => (c[2] as { id: string }).id);
 
 beforeEach(() => {
   vi.clearAllMocks();
   pendentes = [];
   comConta = new Set();
   comChave = new Set();
+  falhaNaConta = new Set();
   filtroPendentes = null;
   vi.spyOn(console, 'error').mockImplementation(() => {});
   vi.spyOn(console, 'log').mockImplementation(() => {});
 });
 
 describe('faxina de checkouts abandonados', () => {
-  it('so busca pendentes de cartao/Pix Automatico com mais de 24h', async () => {
+  it('so busca vinculos sem assinatura, parados ha 24h, num lote que cabe no Workers Free', async () => {
     await limparCheckoutsAbandonados(env);
     expect(filtroPendentes).toMatchObject({
-      status: 'eq.pending',
+      status: 'in.(pending,canceled)',
       payment_method: 'in.(card,pix_automatic)',
+      // BLOQUEANTE #7: vinculo refeito pelo operador (com assinatura) nunca entra.
+      asaas_subscription_id: 'is.null',
+      order: 'updated_at.asc',
+      limit: '7',
     });
-    const desde = Date.parse(String(filtroPendentes!.created_at).replace(/^lt\./, ''));
+    const desde = Date.parse(String(filtroPendentes!.updated_at).replace(/^lt\./, ''));
     expect(Date.now() - desde).toBeGreaterThan(23.9 * 60 * 60 * 1000);
   });
 
-  it('sessao de cartao vencida e Pix vencido, sem conta nem chave: apaga os tenants', async () => {
+  it('sessao de cartao sem cobranca e Pix vencido sem pagamento: apaga os tenants', async () => {
     pendentes = [cartao('t1'), pix('t2')];
     const r = await limparCheckoutsAbandonados(env);
     expect(r).toEqual({ removidos: 2, mantidos: 0 });
-    expect(supabaseDelete).toHaveBeenCalledWith(env, 'tenants', { id: 'eq.t1' });
-    expect(supabaseDelete).toHaveBeenCalledWith(env, 'tenants', { id: 'eq.t2' });
+    expect(apagados()).toEqual(['eq.t1', 'eq.t2']);
+    expect(listPayments).toHaveBeenCalledWith(env, { checkoutSession: 'chk_t1' }, 1);
+    expect(listPayments).toHaveBeenCalledWith(env, { customer: 'cus_t2' }, 10);
   });
 
-  it('sessao ainda ATIVA: cancela no Asaas e so entao apaga', async () => {
-    pendentes = [cartao('t3')];
-    vi.mocked(cardCheckoutStatus).mockResolvedValueOnce('ACTIVE');
-    const r = await limparCheckoutsAbandonados(env);
-    expect(cancelCardCheckout).toHaveBeenCalledWith(env, 'chk_t3');
-    expect(r.removidos).toBe(1);
-  });
-
-  it('na duvida mantem: sessao PAGA, status indefinido, cancelamento falhou, Pix autorizado', async () => {
-    pendentes = [cartao('pago'), cartao('indef'), cartao('falhou'), pix('autorizado')];
-    vi.mocked(cardCheckoutStatus)
-      .mockResolvedValueOnce('PAID')
+  it('BLOQUEANTE #6: Pix sem resposta, autorizado ou com status estranho NAO e cancelado nem apagado', async () => {
+    pendentes = [pix('semResposta'), pix('autorizado'), pix('estranho')];
+    vi.mocked(pixAutomaticAuthorizationStatus)
       .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce('ACTIVE');
-    vi.mocked(cancelCardCheckout).mockResolvedValueOnce(false);
-    vi.mocked(pixAutomaticAuthorizationStatus).mockResolvedValueOnce('ACTIVE');
+      .mockResolvedValueOnce('ACTIVE')
+      .mockResolvedValueOnce('DENIED');
     const r = await limparCheckoutsAbandonados(env);
-    expect(r).toEqual({ removidos: 0, mantidos: 4 });
+    expect(r).toEqual({ removidos: 0, mantidos: 3 });
+    expect(cancelPixAutomaticAuthorization).not.toHaveBeenCalled();
     expect(supabaseDelete).not.toHaveBeenCalled();
   });
 
-  it('tenant com conta conectada ou chave de API nunca e apagado', async () => {
+  it('Pix ainda nao autorizado (CREATED) e sem pagamento: cancela e so entao apaga', async () => {
+    pendentes = [pix('t3'), pix('t4')];
+    vi.mocked(pixAutomaticAuthorizationStatus)
+      .mockResolvedValueOnce('CREATED')
+      .mockResolvedValueOnce('CREATED');
+    vi.mocked(cancelPixAutomaticAuthorization)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+    const r = await limparCheckoutsAbandonados(env);
+    expect(cancelPixAutomaticAuthorization).toHaveBeenCalledWith(env, 'auth_t3');
+    expect(r).toEqual({ removidos: 1, mantidos: 1 });
+    expect(apagados()).toEqual(['eq.t3']);
+  });
+
+  it('#8: qualquer sinal de dinheiro, ou consulta que falhou, mantem o tenant', async () => {
+    pendentes = [cartao('cartaoComCobranca'), pix('pixPago'), cartao('consultaFalhou')];
+    vi.mocked(listPayments)
+      .mockResolvedValueOnce([cobranca('PENDING', 'chk_cartaoComCobranca')])
+      .mockResolvedValueOnce([cobranca('PENDING'), cobranca('RECEIVED')])
+      .mockResolvedValueOnce(null);
+    const r = await limparCheckoutsAbandonados(env);
+    expect(r).toEqual({ removidos: 0, mantidos: 3 });
+    expect(supabaseDelete).not.toHaveBeenCalled();
+  });
+
+  it('tenant com conta conectada ou chave de API nunca e apagado, e o Asaas nem e tocado', async () => {
     pendentes = [cartao('comConta'), pix('comChave')];
     comConta.add('comConta');
     comChave.add('comChave');
     const r = await limparCheckoutsAbandonados(env);
     expect(r).toEqual({ removidos: 0, mantidos: 2 });
+    expect(cancelCardCheckout).not.toHaveBeenCalled();
+    expect(pixAutomaticAuthorizationStatus).not.toHaveBeenCalled();
     expect(supabaseDelete).not.toHaveBeenCalled();
+  });
+
+  it('#10: erro num item nao para os outros; o mantido vai para o fim da fila', async () => {
+    pendentes = [cartao('quebrado'), cartao('ok')];
+    falhaNaConta.add('quebrado');
+    const r = await limparCheckoutsAbandonados(env);
+    expect(r).toEqual({ removidos: 1, mantidos: 1 });
+    expect(apagados()).toEqual(['eq.ok']);
+    const bump = vi.mocked(supabaseUpdate).mock.calls[0]!;
+    expect(bump[1]).toBe('billing_subscriptions');
+    expect(bump[2]).toEqual({ tenant_id: 'eq.quebrado', asaas_subscription_id: 'is.null' });
+    expect(bump[3]).toHaveProperty('updated_at');
   });
 
   it('sem ASAAS_API_KEY nao faz nada', async () => {

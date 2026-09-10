@@ -141,14 +141,22 @@ tem `npm run portal:link -- <tenant_id>` como plano B.
   tela) ou `card`. No cartao o Worker cria o tenant e uma sessao de checkout
   hospedado do Asaas (`CREDIT_CARD` + `RECURRENT`, 60 min) e devolve
   `checkout_url`; o navegador vai para a pagina do Asaas e volta para o painel.
-- `/hooks/billing` ancora o cartao na sessao (`payment.checkoutSession` ou
-  `CHECKOUT_PAID`), nunca no cliente; cliente so ancora o Pix Automatico.
+- `/hooks/billing` ancora o cartao na sessao (`payment.checkoutSession`,
+  `CHECKOUT_PAID` ou, sem ela no payload, `GET /payments/{id}` no Asaas),
+  nunca no cliente; cliente so ancora o Pix Automatico. Eventos fora de ordem
+  nao vencem o estado atual da cobranca (F2.27).
+- Nova tentativa com os mesmos dados encerra o checkout anterior (comprovado
+  sem pagamento) antes de abrir outro (F2.27).
 - Cron de hora em hora (`src/lib/limpeza.ts`) remove checkouts abandonados.
 - Painel: `GET/PUT/DELETE /portal/webhook`.
 - Landing na Vercel com deploy por push; backend segue no Workers.
 
 ## Verificacao
 
+- F2.27: 212 testes verdes (18 arquivos): faxina (Pix sem resposta nunca e
+  cancelado, cobranca com dinheiro mantem, erro isolado por item), nova
+  tentativa e troca de metodo, eventos fora de ordem, chargeback, conta
+  desconectada que volta em atraso, cron.
 - F2.25/F2.26: 199 testes verdes (17 arquivos), incluindo
   `test/limpeza.test.ts` e os cenarios do review (cliente de outro tenant
   nunca ancora cartao, vinculo nunca sobrescrito, reuso da sessao).

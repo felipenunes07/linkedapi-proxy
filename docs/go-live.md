@@ -167,12 +167,12 @@ npm run smoke
       sessao salva no navegador de quem pagou; plano B do operador:
       `npm run portal:link -- <tenant_id>`.
 
-## I. Cartao recorrente + landing na Vercel (F2.25/F2.26)
+## I. Cartao recorrente + landing na Vercel (F2.25 a F2.27)
 
 Ordem obrigatoria (o Worker novo grava cartao com `asaas_customer_id` vazio,
 o que so a 0010 permite):
 
-1. Migration 0010:
+1. [x] Migration 0010 (aplicada e conferida em 2026-09-10):
 
 ```bash
 supabase db query --linked --project-ref voojvcdihyymewrhrlti -f supabase/migrations/0010_checkout_cartao.sql
@@ -185,9 +185,15 @@ supabase db query --linked --project-ref voojvcdihyymewrhrlti -f supabase/migrat
 npm run deploy
 ```
 
-3. Webhook do Asaas: incluir `CHECKOUT_PAID` nos eventos do webhook
-   `d25614cc-959f-48d0-80ea-d06dbd2945a2` (segunda ancora do cartao; a
-   primeira e `payment.checkoutSession`, que ja chega nos eventos PAYMENT_*).
+3. [x] Webhook do Asaas `d25614cc-959f-48d0-80ea-d06dbd2945a2` (2026-09-10,
+   via `PUT /v3/webhooks/{id}` com o mesmo `authToken`): eventos agora sao
+   PAYMENT_CONFIRMED, PAYMENT_RECEIVED, PAYMENT_OVERDUE, CHECKOUT_PAID e
+   PAYMENT_CHARGEBACK_REQUESTED. Conferido depois: `enabled`, fila nao
+   interrompida, `hasAuthToken: true`. O Worker antigo responde 200 ignored
+   aos eventos novos, entao a ordem entre este passo e o deploy nao importa.
+   - [ ] [VOCE] Site da landing nas informacoes da conta Asaas (Minha Conta >
+     Informacoes > Site = `https://landing-api-linkedin.vercel.app`; hoje
+     vazio). O checkout de cartao devolve o cliente para esse dominio.
 4. Landing: push no `master` do repo da landing publica sozinho na Vercel
    (`landing-api-linkedin.vercel.app`). Manual, se precisar: `bash publicar.sh`.
 5. Pages antigo (`linkedapi-site.pages.dev`): publicar so um `_redirects` para

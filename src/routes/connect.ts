@@ -4,6 +4,7 @@ import { supabaseSelect, supabaseInsert, supabaseUpdate } from '../lib/supabase'
 import { hashApiKey } from '../lib/hash';
 import { getAccount } from '../lib/unipile';
 import { attemptKey, bumpAttempts } from '../lib/throttle';
+import { statusAoReativar } from '../lib/billing';
 
 // Callback da auto-conexao (Marco 4, hosted auth).
 //
@@ -179,7 +180,8 @@ connectHooks.post('/', async (c) => {
       c.env,
       'connected_accounts',
       { id: `eq.${row.id}`, tenant_id: `eq.${token.tenant_id}` },
-      { status: 'active' },
+      // Reconectar nao fura a inadimplencia (review F2.25, #3).
+      { status: await statusAoReativar(c.env, token.tenant_id) },
     );
     return c.json({ ok: true });
   }
@@ -246,7 +248,7 @@ connectHooks.post('/', async (c) => {
       c.env,
       'connected_accounts',
       { id: `eq.${existing[0].id}`, tenant_id: `eq.${token.tenant_id}` },
-      { status: 'active' },
+      { status: await statusAoReativar(c.env, token.tenant_id) },
     );
     return c.json({ ok: true });
   }
@@ -256,7 +258,7 @@ connectHooks.post('/', async (c) => {
       tenant_id: token.tenant_id,
       unipile_account_id: account_id,
       provider: 'linkedin',
-      status: 'active',
+      status: await statusAoReativar(c.env, token.tenant_id),
     });
   } catch (err) {
     // Corrida com outro notify: o unique do banco (migration 0002) decide.

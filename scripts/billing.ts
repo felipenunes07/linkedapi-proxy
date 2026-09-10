@@ -149,6 +149,13 @@ async function subscribe(
         tenant_id: tenant.id,
         asaas_customer_id: customer.id,
         asaas_subscription_id: subscription.id,
+        // Pix manual (cobranca nova a cada mes). Limpa os campos do checkout:
+        // um tenant que veio do checkout e passou a assinar pelo operador nao
+        // pode seguir parecendo checkout abandonado para a faxina (review
+        // F2.25, #7).
+        payment_method: 'pix',
+        asaas_checkout_id: null,
+        asaas_authorization_id: null,
         status: 'pending',
         updated_at: new Date().toISOString(),
       }),

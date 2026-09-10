@@ -378,14 +378,95 @@ export async function cancelCardCheckout(env: Env, checkoutId: string): Promise<
   return res.ok;
 }
 
-// Status de uma sessao de checkout (ACTIVE, CANCELED, EXPIRED, PAID). null se o
-// Asaas nao respondeu: quem chama trata como "nao sei" e nao arrisca nada.
-export async function cardCheckoutStatus(env: Env, checkoutId: string): Promise<string | null> {
-  const res = await asaasFetch(env, `/checkouts/${encodeURIComponent(checkoutId)}`);
-  if (!res.ok) return null;
-  const data = await readJson<{ status?: string }>(res, 'asaas_checkout_status_failed');
-  return typeof data.status === 'string' ? data.status : null;
+// ---------------------------------------------------------------------------
+// Consultas de cobranca (review F2.25, 2a rodada). SO endpoints documentados:
+//   GET /v3/payments/{id}  (objeto traz checkoutSession, subscription, customer)
+//   GET /v3/payments?checkoutSession=|subscription=|customer=|status=
+// Sao a fonte da verdade no servidor: o webhook nao precisa confiar no payload
+// para ligar uma cobranca de cartao ao tenant, e a faxina/reuso sabem se uma
+// sessao ou autorizacao ja teve pagamento. Falha de consulta = null ("nao
+// sei"), e quem chama nunca arrisca nada com null.
+// ---------------------------------------------------------------------------
+
+export interface CobrancaResumo {
+  id: string;
+  status: string;
+  subscription: string | null;
+  customer: string | null;
+  checkoutSession: string | null;
 }
+
+function texto(v: unknown): string | null {
+  return typeof v === 'string' && v.length > 0 ? v : null;
+}
+
+function resumir(p: Record<string, unknown>): CobrancaResumo | null {
+  const id = texto(p.id);
+  const status = texto(p.status);
+  if (!id || !status) return null;
+  return {
+    id,
+    status,
+    subscription: texto(p.subscription),
+    customer: texto(p.customer),
+    checkoutSession: texto(p.checkoutSession),
+  };
+}
+
+export async function getPayment(env: Env, paymentId: string): Promise<CobrancaResumo | null> {
+  const res = await asaasFetch(env, `/payments/${encodeURIComponent(paymentId)}`);
+  if (!res.ok) return null;
+  const data = await readJson<Record<string, unknown>>(res, 'asaas_payment_failed');
+  return resumir(data);
+}
+
+export async function listPayments(
+  env: Env,
+  filtro: { checkoutSession?: string; subscription?: string; customer?: string; status?: string },
+  limit = 10,
+): Promise<CobrancaResumo[] | null> {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(filtro)) {
+    if (v) qs.set(k, v);
+  }
+  if ([...qs.keys()].filter((k) => k !== 'status').length === 0) {
+    // Sem filtro de dono listaria a conta inteira: nunca.
+    return null;
+  }
+  qs.set('limit', String(limit));
+  const res = await asaasFetch(env, `/payments?${qs.toString()}`);
+  if (!res.ok) return null;
+  const data = await readJson<{ data?: Record<string, unknown>[] }>(res, 'asaas_payments_failed');
+  if (!Array.isArray(data.data)) return null;
+  // A conta Asaas e compartilhada com outras vendas da empresa: um filtro que o
+  // Asaas ignorasse devolveria cobrancas de OUTROS clientes. Cada item precisa
+  // casar com todos os filtros pedidos; um que nao casa (ou vem sem o campo)
+  // invalida a resposta inteira. Resultado: "nao sei", nunca dado alheio.
+  const lista = data.data.map(resumir);
+  const casa = (p: CobrancaResumo | null): p is CobrancaResumo =>
+    p !== null &&
+    (!filtro.checkoutSession || p.checkoutSession === filtro.checkoutSession) &&
+    (!filtro.subscription || p.subscription === filtro.subscription) &&
+    (!filtro.customer || p.customer === filtro.customer) &&
+    (!filtro.status || p.status === filtro.status);
+  return lista.every(casa) ? (lista as CobrancaResumo[]) : null;
+}
+
+// Status de cobranca que significam dinheiro recebido (ou a caminho, no cartao
+// aprovado). Qualquer um deles prova que o tenant NAO e checkout abandonado.
+export const STATUS_PAGOS = new Set([
+  'CONFIRMED',
+  'RECEIVED',
+  'RECEIVED_IN_CASH',
+  'REFUND_REQUESTED',
+  'REFUND_IN_PROGRESS',
+  'CHARGEBACK_REQUESTED',
+  'CHARGEBACK_DISPUTE',
+  'AWAITING_CHARGEBACK_REVERSAL',
+  'DUNNING_REQUESTED',
+  'DUNNING_RECEIVED',
+  'AWAITING_RISK_ANALYSIS',
+]);
 
 // Status de uma autorizacao de Pix Automatico. null se o Asaas nao respondeu.
 export async function pixAutomaticAuthorizationStatus(

@@ -108,8 +108,17 @@ Atualizado em 2026-09-10.
 
 - [x] Cartao recorrente pelo checkout hospedado do Asaas, ancorado na sessao.
 - [x] Landing e painel na Vercel com deploy por push; webhooks no painel.
-- [ ] Primeira compra real no CARTAO (confirma no real que as cobrancas
-      mensais trazem `payment.checkoutSession` ou a assinatura ja vinculada).
+- [x] Segunda rodada do review adversarial (F2.27): 13 achados corrigidos,
+      212 testes verdes (18 arquivos).
+- [ ] Primeira compra real no CARTAO: confirma no real que a 1a cobranca liga
+      a sessao ao tenant (pelo payload ou pela busca `GET /payments/{id}`) e
+      que a renovacao do mes 2 chega pela assinatura ja gravada.
+- [ ] Cadastrar o site da landing nas informacoes da conta Asaas (campo
+      `site` esta vazio). O Asaas usa esse dominio nas URLs de volta do
+      checkout de cartao.
+- [ ] Menores deferidos do review F2.27: pepper HMAC nas chaves de throttle
+      do KV (hoje SHA-256 do e-mail/CPF, KV so nosso); estorno nao pausa
+      (decisao consciente, ver F2.27).
 - [ ] Remover `linkedapi-site.pages.dev` do CORS depois de 30 dias de
       redirecionamento (e so entao apagar o projeto Pages).
 - [ ] Nome definitivo do produto (hoje "Playbook API", provisorio) e dominio
