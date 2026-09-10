@@ -54,9 +54,9 @@ Atualizado em 2026-09-10.
 - [x] Landing reescrita so com o que o produto entrega (LinkedIn, 3 endpoints,
       webhooks), sem logos de clientes, "teste gratis", SOC 2 ou 99,9%.
 - [x] Termos de uso e politica de privacidade redigidos (landing).
-- [ ] Aplicar migrations 0008 e 0009 em producao (bloqueado por permissao;
-      ver ACOES-HUMANAS 0.1).
-- [ ] Deploy do Worker e publicacao da landing (depois das migrations).
+- [x] Migrations 0008 e 0009 em producao (2026-09-10, conferidas).
+- [x] Deploy do Worker (`291a684e`) e landing publicada (`721dd6e6`), smoke 7/7.
+- [ ] Push dos commits (git local logado em outra conta do GitHub).
 - [ ] Confirmar Pix Automatico habilitado na conta Asaas de producao.
 - [ ] Resend (opcional): boas-vindas e "entrar" por e-mail.
 

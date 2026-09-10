@@ -34,7 +34,7 @@ humana** (logins, contas, gente testando): [ACOES-HUMANAS.md](ACOES-HUMANAS.md).
 | Marco 5 | Docs (Scalar) + emissão/revogação de chave | ✅ **PROVADO no real em 2026-09-01** (local E workers.dev: emite -> 200 -> revoga -> 401) |
 | Marco 4 | Auto-conexão (hosted auth) | ✅ **mecanismo PASS em produção 2026-09-02** (callback + token + tenant + vínculo automático, âncora M4.11); prova com pessoa EXTERNA e teste não-dev: **DEFERRED, o 1º onboarding real é a evidência final** |
 | Fase 2 | Billing, webhooks, planos, reconexão, admin | ✅ **completa em 2026-09-03**: código, secrets, webhooks da Unipile, billing provado ponta a ponta no Asaas sandbox (pagar → ativa, atrasar → pausa, pagar → despausa) e **Asaas de produção configurado** (key real + webhook). Falta só a primeira assinatura real ([specs/fase-2.md](specs/fase-2.md)) |
-| F2.18-F2.23 | Pix Automático no checkout + **painel do cliente** (pagou → conecta o LinkedIn → gera a chave, sem operador) + landing honesta, termos e privacidade + teto de tentativas e erros 402/409 claros na API | ✅ código + testes + 3 passadas de security review (2026-09-10). ⏳ **Não está no ar**: falta aplicar as migrations 0008/0009 (bloqueado por permissão, ver [ACOES-HUMANAS.md](ACOES-HUMANAS.md) 0.1), deployar o Worker e publicar a landing ([docs/go-live.md](docs/go-live.md) seção H) |
+| F2.18-F2.23 | Pix Automático no checkout + **painel do cliente** (pagou → conecta o LinkedIn → gera a chave, sem operador) + landing honesta, termos e privacidade + teto de tentativas e erros 402/409 claros na API | ✅ código + testes + 3 passadas de security review (2026-09-10). ✅ **No ar desde 2026-09-10**: migrations 0008/0009 aplicadas, Worker `291a684e`, landing `721dd6e6`, smoke 7/7 ([docs/go-live.md](docs/go-live.md) seção H). Falta a primeira compra real |
 
 Provas reais executadas em 2026-09-01 (contra Supabase + Unipile + LinkedIn reais):
 - Marco 5 local e público: PASS (script `prova:chave`, tenant A / conta Márcio).
@@ -133,11 +133,10 @@ Os 3 endpoints do proxy: `POST /v1/messages`, `POST /v1/invitations`,
 > Recorte do que exige mão humana: [ACOES-HUMANAS.md](ACOES-HUMANAS.md).
 > Checklist com os comandos: [docs/go-live.md](docs/go-live.md), seção H.
 
-1. **Migrations 0008 e 0009 em produção (bloqueia a venda).** O modo de
-   permissão impediu o Claude de alterar o banco de produção; colar no SQL
-   Editor ou autorizar o CLI.
-2. **Deploy do Worker + publicação da landing**, nessa ordem e só depois do
-   item 1 (Worker novo sem a 0008 quebra o checkout).
+1. ~~Migrations 0008/0009, deploy do Worker e publicação da landing~~ FEITO
+   em 2026-09-10 (smoke 7/7).
+2. **Push dos commits** para o GitHub: o git desta máquina está logado como
+   `BaseCoatMarketing`, sem acesso aos repos `felipenunes07` (`gh auth login`).
 3. **Confirmar Pix Automático habilitado** na conta Asaas de produção.
 4. **Uma compra real ponta a ponta** (checkout → Pix → painel → wizard →
    chave), com um CPF e um LinkedIn da equipe.

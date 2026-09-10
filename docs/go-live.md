@@ -118,11 +118,15 @@ npm run prova:chave -- <tenant_id>
 
 ## H. Pix Automatico + painel do cliente (F2.18 a F2.21)
 
-Codigo pronto e testado (174 testes). O Worker em producao ainda e o deploy de
-2026-09-03 17:57, ANTERIOR ao F2.18: nao deployar antes das migrations, senao
-todo checkout cria a autorizacao no Asaas e cancela em seguida.
+NO AR desde 2026-09-10 (go-live autorizado pelo Felipe): migrations aplicadas
+e conferidas, Worker `291a684e-8aa1-4d1e-8e91-5176dd04692e`, landing
+`721dd6e6` (producao, branch master), smoke 7/7. Ordem que vale para qualquer
+repeticao: migrations ANTES do Worker (Worker novo sem a 0008 quebra o
+checkout).
 
-- [ ] [VOCE] Aplicar as migrations 0008 e 0009 no Supabase. Pelo SQL Editor
+- [x] Migrations 0008 e 0009 aplicadas pelo CLI (2026-09-10). Conferido:
+      colunas novas, `portal_tokens` com RLS e sem acesso de `anon`, funcao de
+      busca `SECURITY INVOKER`. Referencia: Pelo SQL Editor
       (colar `supabase/migrations/0008_pix_automatico.sql` e depois
       `0009_portal.sql`) ou pelo CLI ja logado nesta maquina:
 
@@ -134,20 +138,20 @@ supabase db query --linked --project-ref voojvcdihyymewrhrlti -f supabase/migrat
 supabase db query --linked --project-ref voojvcdihyymewrhrlti -f supabase/migrations/0009_portal.sql
 ```
 
-- [ ] Deploy do Worker (depois das migrations):
+- [x] Deploy do Worker (2026-09-10, versao `291a684e`):
 
 ```bash
 npm run deploy
 ```
 
-- [ ] Publicar a landing (repo `linkedapi-site`, projeto Pages `linkedapi-site`
-      na conta do Victor):
+- [x] Landing publicada (2026-09-10, deployment `721dd6e6`; repo
+      `linkedapi-site`, projeto Pages `linkedapi-site` na conta do Victor):
 
 ```bash
 bash publicar.sh
 ```
 
-- [ ] Smoke (so leitura, nada e criado): `GET /portal/status` sem token =
+- [x] Smoke 7/7 ok em 2026-09-10 (so leitura, nada e criado): `GET /portal/status` sem token =
       401; preflight do painel = 204; `/checkout` com CPF invalido = 400;
       chave inexistente = 401:
 
