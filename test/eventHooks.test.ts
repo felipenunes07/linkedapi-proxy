@@ -53,6 +53,8 @@ function matches(row: Record<string, unknown>, filters: Record<string, string>):
     }
     if (value.startsWith('eq.')) {
       if (String(row[key]) !== value.slice(3)) return false;
+    } else if (value.startsWith('in.(')) {
+      if (!value.slice(4, -1).split(',').includes(String(row[key]))) return false;
     } else {
       return false;
     }
@@ -971,5 +973,87 @@ describe('POST /hooks/billing, dois assentos do mesmo cliente (F2.29)', () => {
     );
     expect(res.status).toBe(200);
     expect(db.billing.find((b) => b.tenant_id === 'tS1')?.status).toBe('active');
+  });
+});
+
+// F2.31: o caso que mais dói do review. Quem apenas repetiu o checkout (o
+// fluxo permite; a tentativa anterior vira `canceled` com o mesmo cliente do
+// Asaas e sem assinatura) nao pode ter o pagamento REAL descartado por
+// "ambiguidade". Dinheiro entrando e assento nunca ativado, sem reprocesso.
+describe('POST /hooks/billing, linha cancelada do mesmo cliente (F2.31)', () => {
+  it('checkout refeito: a linha canceled nao torna o pagamento ambiguo', async () => {
+    db.tenants.tR1 = { webhook_url: null, webhook_secret: null };
+    db.tenants.tR2 = { webhook_url: null, webhook_secret: null };
+    db.accounts.push({ id: 'ca-r2', tenant_id: 'tR2', unipile_account_id: 'ua-r2', status: 'active' });
+    db.billing.push(
+      // Tentativa abandonada: mesmo cliente no Asaas, sem assinatura.
+      {
+        tenant_id: 'tR1',
+        asaas_subscription_id: null,
+        asaas_customer_id: 'cus_repetido',
+        payment_method: 'pix_automatic',
+        status: 'canceled',
+      },
+      // A venda que vale.
+      {
+        tenant_id: 'tR2',
+        asaas_subscription_id: null,
+        asaas_customer_id: 'cus_repetido',
+        payment_method: 'pix_automatic',
+        status: 'pending',
+      },
+    );
+
+    const res = await post(
+      '/hooks/billing',
+      {
+        event: 'PAYMENT_CONFIRMED',
+        payment: { id: 'pay_r', billingType: 'PIX', customer: 'cus_repetido' },
+      },
+      { 'asaas-access-token': ASAAS_TOKEN },
+    );
+    expect(res.status).toBe(200);
+    expect(db.billing.find((b) => b.tenant_id === 'tR2')?.status).toBe('active');
+    expect(db.billing.find((b) => b.tenant_id === 'tR1')?.status).toBe('canceled');
+  });
+
+  it('ambiguidade de verdade: o sinal leva os tenants, para dar para reconciliar', async () => {
+    db.tenants.tR3 = { webhook_url: null, webhook_secret: null };
+    db.tenants.tR4 = { webhook_url: null, webhook_secret: null };
+    db.billing.push(
+      {
+        tenant_id: 'tR3',
+        asaas_subscription_id: null,
+        asaas_customer_id: 'cus_duplo',
+        payment_method: 'pix_automatic',
+        status: 'pending',
+      },
+      {
+        tenant_id: 'tR4',
+        asaas_subscription_id: null,
+        asaas_customer_id: 'cus_duplo',
+        payment_method: 'pix_automatic',
+        status: 'pending',
+      },
+    );
+    const erros: string[] = [];
+    const spy = vi.spyOn(console, 'error').mockImplementation((...args) => {
+      erros.push(String(args[0]));
+    });
+
+    const res = await post(
+      '/hooks/billing',
+      {
+        event: 'PAYMENT_CONFIRMED',
+        payment: { id: 'pay_d', billingType: 'PIX', customer: 'cus_duplo' },
+      },
+      { 'asaas-access-token': ASAAS_TOKEN },
+    );
+    expect(await res.json()).toEqual({ ok: true, ignored: true });
+    expect(db.billing.filter((b) => b.asaas_customer_id === 'cus_duplo' && b.status === 'pending')).toHaveLength(2);
+    const linha = erros.find((l) => l.startsWith('billing_ambiguous_customer'));
+    expect(linha).toContain('tR3');
+    expect(linha).toContain('tR4');
+    spy.mockRestore();
   });
 });

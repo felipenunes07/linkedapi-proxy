@@ -115,6 +115,7 @@ import { updateCustomerEmail } from '../src/lib/asaas';
 
 const TOKEN_A = `lk_portal_${'a'.repeat(64)}`;
 const TOKEN_B = `lk_portal_${'b'.repeat(64)}`;
+const TOKEN_C = `lk_portal_${'c'.repeat(64)}`;
 const FUTURO = '2099-01-01T00:00:00.000Z';
 const PASSADO = '2000-01-01T00:00:00.000Z';
 
@@ -916,5 +917,78 @@ describe('portal: dominio proprio da tela de conexao (F2.30)', () => {
     const res = await req('/portal/connect', { method: 'POST', token: TOKEN_A });
     const body = (await res.json()) as { data: { url: string } };
     expect(body.data.url).toBe('https://wizard.example/xyz');
+  });
+});
+
+// F2.31: correcoes da revisao de seguranca do F2.29. Credencial nao pode
+// sobrar viva sem tela que a alcance, e o botao de panico tem que cobrir o
+// que o cliente entende por "minha conta": todos os assentos dele.
+describe('portal: sessoes com mais de um assento (F2.31)', () => {
+  async function grupoDeDois() {
+    db.tenants!.push({
+      id: 'tC',
+      name: 'Cliente A',
+      status: 'active',
+      contact_email: 'a@example.com',
+      group_id: 'tA',
+      daily_message_limit: null,
+      daily_invitation_limit: null,
+      created_at: '2026-09-05T00:00:00.000Z',
+    });
+    for (const t of db.tenants!) if (t.id === 'tA') t.group_id = 'tA';
+    db.billing_subscriptions!.push({ tenant_id: 'tC', status: 'active', asaas_customer_id: 'cus_A' });
+    db.portal_tokens!.push({
+      id: 'pt-c',
+      tenant_id: 'tC',
+      token_hash: await hashApiKey(TOKEN_C),
+      kind: 'session',
+      status: 'active',
+      expires_at: FUTURO,
+    });
+  }
+
+  it('trocar de assento encerra a sessao de origem (nao sobra credencial orfa)', async () => {
+    await grupoDeDois();
+    const env = baseEnv();
+    const lista = (await (
+      await req('/portal/seats', { token: TOKEN_A }, env)
+    ).json()) as { data: { seats: Row[] } };
+    const alvo = lista.data.seats.find((s) => s.current === false)!;
+
+    const troca = await req(
+      '/portal/switch',
+      { method: 'POST', token: TOKEN_A, body: { ref: alvo.ref } },
+      env,
+    );
+    expect(troca.status).toBe(200);
+    const nova = ((await troca.json()) as { data: { token: string } }).data.token;
+
+    // A sessao de origem morreu; a nova vale.
+    const velha = await req('/portal/status', { token: TOKEN_A }, env);
+    expect(velha.status).toBe(401);
+    const atual = await req('/portal/status', { token: nova }, env);
+    expect(atual.status).toBe(200);
+  });
+
+  it('"sair de todos" derruba as sessoes de TODOS os assentos do cliente', async () => {
+    await grupoDeDois();
+    const env = baseEnv();
+    // A sessao do irmao existe e funciona antes.
+    expect((await req('/portal/status', { token: TOKEN_C }, env)).status).toBe(200);
+
+    const saida = await req('/portal/logout', { method: 'POST', token: TOKEN_A, body: { all: true } }, env);
+    expect(saida.status).toBe(200);
+    expect(await saida.json()).toEqual({ ok: true, data: { all: true } });
+
+    expect((await req('/portal/status', { token: TOKEN_A }, env)).status).toBe(401);
+    expect((await req('/portal/status', { token: TOKEN_C }, env)).status).toBe(401);
+  });
+
+  it('sair normal (sem all) derruba SO a sessao usada, nunca a do outro assento', async () => {
+    await grupoDeDois();
+    const env = baseEnv();
+    await req('/portal/logout', { method: 'POST', token: TOKEN_A, body: {} }, env);
+    expect((await req('/portal/status', { token: TOKEN_A }, env)).status).toBe(401);
+    expect((await req('/portal/status', { token: TOKEN_C }, env)).status).toBe(200);
   });
 });

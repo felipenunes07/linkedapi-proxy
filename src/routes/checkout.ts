@@ -15,6 +15,7 @@ import { encerrarCheckout, pendentePorAncora } from '../lib/limpeza';
 import {
   consumirSeatToken,
   createPortalToken,
+  resolvePortalToken,
   garantirGrupo,
   lerSeatToken,
   portalUrl,
@@ -68,6 +69,7 @@ const PIX_VALIDADE_MS = 60 * 60 * 1000;
 const MAX_NAME = 100;
 const MAX_EMAIL = 150;
 const SEAT_TOKEN_FORMAT = /^lk_seat_[0-9a-f]{64}$/;
+const MAX_PORTAL_TOKEN = 200;
 
 interface TenantRow {
   id: string;
@@ -200,6 +202,12 @@ checkout.post('/', async (c) => {
   // um assento DENTRO do grupo de quem pediu no painel, em vez de uma conta
   // solta. O token e a unica coisa que forma grupo: e de uso unico, so nasce
   // em rota autenticada e so e lido aqui (nunca por e-mail igual).
+  //
+  // O token NAO basta (review F2.31): a sessao que o gerou tem que vir junto,
+  // no X-PORTAL-TOKEN. Sem isso, quem pusesse a mao num seat_token vivo criava
+  // um assento no grupo da vitima, recebia a sessao dele na resposta e, pelo
+  // /portal/switch, caia na conta da vitima sem pagar nada. Com a sessao
+  // exigida, o token sozinho nao vale: quem ja a tem e o proprio dono.
   if (seat_token !== undefined && typeof seat_token !== 'string') {
     return c.json({ error: 'invalid_seat_token' }, 400);
   }
@@ -208,8 +216,18 @@ checkout.post('/', async (c) => {
     if (!SEAT_TOKEN_FORMAT.test(seat_token)) {
       return c.json({ error: 'invalid_seat_token' }, 400);
     }
+    const sessaoToken = c.req.header('X-PORTAL-TOKEN') ?? '';
+    const sessao =
+      sessaoToken.length > 0 && sessaoToken.length <= MAX_PORTAL_TOKEN
+        ? await resolvePortalToken(c.env, sessaoToken)
+        : null;
     assento = await lerSeatToken(c.env, seat_token);
-    if (!assento) {
+    if (
+      !assento ||
+      !sessao ||
+      'motivo' in sessao ||
+      sessao.session.tenantId !== assento.tenantId
+    ) {
       return c.json({ error: 'invalid_seat_token' }, 401);
     }
   }

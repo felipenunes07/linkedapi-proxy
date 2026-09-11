@@ -60,7 +60,7 @@ function rotuloDaConta(nomeNaOrigem: string | undefined, tokenEnviado: string): 
     return null;
   }
   const limpo = nomeNaOrigem
-    .replace(/[\p{Cc}]/gu, ' ')
+    .replace(/[\p{Cc}\p{Cf}]/gu, ' ')
     .trim()
     .slice(0, 80);
   return limpo.length > 0 ? limpo : null;

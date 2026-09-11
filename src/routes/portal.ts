@@ -62,6 +62,7 @@ const DEFAULT_SEAT_CAP = 10;
 const KEY_LOCK_TTL_SECONDS = 60;
 const MAX_WEBHOOK_CHANGES_PER_TENANT = 20;
 const MAX_SEAT_TOKENS_PER_TENANT = 10;
+const MAX_SEATS_READS_PER_TENANT = 600;
 const MAX_SWITCH_PER_TENANT = 60;
 // O token de assento so precisa viver da decisao ate o checkout terminar.
 const SEAT_TOKEN_TTL_MS = 30 * 60 * 1000;
@@ -478,6 +479,17 @@ portal.get('/seats', async (c) => {
   const s = await gate(c);
   if (s instanceof Response) return s;
 
+  // Custa ~4 consultas, contra 1 do /status (que e a rota de polling): teto
+  // proprio por tenant, para uma aba presa em recarga nao virar carga (review
+  // F2.31). Folgado o bastante para o uso normal do painel.
+  const tentativas = await bumpAttempts(
+    c.env.RATE_LIMIT,
+    attemptKey('portal-seats', s.tenantId),
+  );
+  if (tentativas > MAX_SEATS_READS_PER_TENANT) {
+    return c.json({ error: 'rate_limited' }, 429);
+  }
+
   const tenants = await tenantsDoGrupo(c.env, s.tenantId);
   if (tenants.length === 0) {
     return c.json({ error: 'invalid_portal_token' }, 401);
@@ -597,6 +609,17 @@ portal.post('/switch', async (c) => {
   }
 
   const sessao = await createPortalToken(c.env, alvo);
+  // A sessao de origem morre aqui (review F2.31): o painel sobrescreve o token
+  // guardado no navegador, entao deixar a anterior viva por 14 dias so
+  // acumulava credencial que o cliente nao alcanca mais por tela nenhuma.
+  await supabaseUpdate(
+    c.env,
+    'portal_tokens',
+    { token_hash: `eq.${s.tokenHash}`, tenant_id: `eq.${s.tenantId}` },
+    { status: 'revoked' },
+  ).catch(() => {
+    console.error('portal_switch_revoke_failed');
+  });
   return c.json({
     ok: true,
     data: { token: sessao.token, expires_at: sessao.expiresAt },
@@ -612,14 +635,28 @@ portal.post('/logout', async (c) => {
 
   const body = await lerCorpo(c);
   const todas = body?.all === true;
-  await supabaseUpdate(
-    c.env,
-    'portal_tokens',
-    todas
-      ? { tenant_id: `eq.${s.tenantId}`, status: 'eq.active' }
-      : { token_hash: `eq.${s.tokenHash}`, tenant_id: `eq.${s.tenantId}` },
-    { status: 'revoked' },
-  );
+  if (todas) {
+    // Botao de panico: cobre TODAS as contas do cliente, nao so o assento
+    // aberto (review F2.31). Com dois assentos, revogar so um deixava as
+    // sessoes das outras contas vivas justamente para quem suspeita de
+    // vazamento. `in.(...)` numa chamada: o grupo tem no maximo o teto de
+    // assentos da conta-mestra.
+    const grupo = await tenantsDoGrupo(c.env, s.tenantId);
+    const ids = grupo.length > 0 ? grupo.map((t) => t.id) : [s.tenantId];
+    await supabaseUpdate(
+      c.env,
+      'portal_tokens',
+      { tenant_id: `in.(${ids.join(',')})`, status: 'eq.active' },
+      { status: 'revoked' },
+    );
+  } else {
+    await supabaseUpdate(
+      c.env,
+      'portal_tokens',
+      { token_hash: `eq.${s.tokenHash}`, tenant_id: `eq.${s.tenantId}` },
+      { status: 'revoked' },
+    );
+  }
   return c.json({ ok: true, data: { all: todas } });
 });
 

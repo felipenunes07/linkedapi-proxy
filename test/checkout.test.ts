@@ -160,7 +160,7 @@ function corpo(extra: Partial<typeof BODY_OK> = {}) {
 function post(
   body: unknown,
   env: Env,
-  opts: { origin?: string; ip?: string; contentType?: string } = {},
+  opts: { origin?: string; ip?: string; contentType?: string; portalToken?: string } = {},
 ) {
   return app.request(
     '/checkout',
@@ -170,6 +170,7 @@ function post(
         'content-type': opts.contentType ?? 'application/json',
         ...(opts.origin ? { Origin: opts.origin } : {}),
         ...(opts.ip ? { 'CF-Connecting-IP': opts.ip } : {}),
+        ...(opts.portalToken ? { 'X-PORTAL-TOKEN': opts.portalToken } : {}),
       },
       body: typeof body === 'string' ? body : JSON.stringify(body),
     },
@@ -643,6 +644,9 @@ describe('POST /checkout, falhas e abusos', () => {
 // venda que o cliente ja tem de pe (o lock passa a ser por intencao).
 describe('POST /checkout, assento adicional (F2.29)', () => {
   const SEAT_TOKEN = `lk_seat_${'c'.repeat(64)}`;
+  // A sessao do painel que gerou o token: sem ela o token nao vale (F2.31).
+  const SESSAO = `lk_portal_${'e'.repeat(64)}`;
+  const SESSAO_DE_OUTRO = `lk_portal_${'f'.repeat(64)}`;
 
   beforeEach(async () => {
     seatTokens = [
@@ -654,14 +658,33 @@ describe('POST /checkout, assento adicional (F2.29)', () => {
         status: 'active',
         expires_at: '2099-01-01T00:00:00.000Z',
       },
+      {
+        id: 'pt-1',
+        tenant_id: 'tenant-origem',
+        token_hash: await hashApiKey(SESSAO),
+        kind: 'session',
+        status: 'active',
+        expires_at: '2099-01-01T00:00:00.000Z',
+      },
+      {
+        id: 'pt-2',
+        tenant_id: 'tenant-alheio',
+        token_hash: await hashApiKey(SESSAO_DE_OUTRO),
+        kind: 'session',
+        status: 'active',
+        expires_at: '2099-01-01T00:00:00.000Z',
+      },
     ];
     tenantsRows = [
       { id: 'tenant-origem', name: 'Maria Souza', group_id: null, status: 'active', created_at: '2026-09-01T00:00:00.000Z' },
+      { id: 'tenant-alheio', name: 'Outro Cliente', group_id: null, status: 'active', created_at: '2026-09-01T00:00:00.000Z' },
     ];
   });
 
   it('com seat_token valido: tenant novo nasce no grupo, token vira usado e a origem entra no grupo', async () => {
-    const res = await post(corpo({ seat_token: SEAT_TOKEN } as never), baseEnv());
+    const res = await post(corpo({ seat_token: SEAT_TOKEN } as never), baseEnv(), {
+      portalToken: SESSAO,
+    });
     expect(res.status).toBe(200);
 
     const tenant = inserted.find((i) => i.table === 'tenants')!;
@@ -684,7 +707,9 @@ describe('POST /checkout, assento adicional (F2.29)', () => {
 
     // Mesmo e-mail e mesmo CPF: sem o token, isto cairia no lock da primeira
     // venda e a encerraria (review F2.25, #5).
-    const segunda = await post(corpo({ seat_token: SEAT_TOKEN } as never), env);
+    const segunda = await post(corpo({ seat_token: SEAT_TOKEN } as never), env, {
+      portalToken: SESSAO,
+    });
     expect(segunda.status).toBe(200);
     expect(cancelPixAutomaticAuthorization).not.toHaveBeenCalled();
     expect(inserted.filter((i) => i.table === 'tenants')).toHaveLength(2);
@@ -692,7 +717,9 @@ describe('POST /checkout, assento adicional (F2.29)', () => {
 
   it('token usado, vencido, de tenant apagado ou inventado: 401 sem criar nada', async () => {
     seatTokens[0]!.status = 'used';
-    const usado = await post(corpo({ seat_token: SEAT_TOKEN } as never), baseEnv());
+    const usado = await post(corpo({ seat_token: SEAT_TOKEN } as never), baseEnv(), {
+      portalToken: SESSAO,
+    });
     expect(usado.status).toBe(401);
     expect(await usado.json()).toEqual({ error: 'invalid_seat_token' });
     expect(inserted).toHaveLength(0);
@@ -700,11 +727,19 @@ describe('POST /checkout, assento adicional (F2.29)', () => {
 
     seatTokens[0]!.status = 'active';
     seatTokens[0]!.expires_at = '2000-01-01T00:00:00.000Z';
-    const vencido = await post(corpo({ seat_token: SEAT_TOKEN, email: 'outra@example.com' } as never), baseEnv());
+    const vencido = await post(
+      corpo({ seat_token: SEAT_TOKEN, email: 'outra@example.com' } as never),
+      baseEnv(),
+      { portalToken: SESSAO },
+    );
     expect(vencido.status).toBe(401);
 
     seatTokens = [];
-    const inventado = await post(corpo({ seat_token: `lk_seat_${'d'.repeat(64)}` } as never), baseEnv());
+    const inventado = await post(
+      corpo({ seat_token: `lk_seat_${'d'.repeat(64)}` } as never),
+      baseEnv(),
+      { portalToken: SESSAO },
+    );
     expect(inventado.status).toBe(401);
     expect(inserted).toHaveLength(0);
   });
@@ -715,6 +750,23 @@ describe('POST /checkout, assento adicional (F2.29)', () => {
     expect(await res.json()).toEqual({ error: 'invalid_seat_token' });
     expect(inserted).toHaveLength(0);
     expect(createCustomer).not.toHaveBeenCalled();
+  });
+
+  it('F2.31: seat_token SEM a sessao do painel, ou com a sessao de outro cliente, nao cria nada', async () => {
+    const semSessao = await post(corpo({ seat_token: SEAT_TOKEN } as never), baseEnv());
+    expect(semSessao.status).toBe(401);
+    expect(await semSessao.json()).toEqual({ error: 'invalid_seat_token' });
+    expect(inserted).toHaveLength(0);
+    expect(createCustomer).not.toHaveBeenCalled();
+    // O token continua vivo: quem nao provou ser o dono nao queima o token dele.
+    expect(seatTokens[0]!.status).toBe('active');
+
+    const sessaoAlheia = await post(corpo({ seat_token: SEAT_TOKEN } as never), baseEnv(), {
+      portalToken: SESSAO_DE_OUTRO,
+    });
+    expect(sessaoAlheia.status).toBe(401);
+    expect(inserted).toHaveLength(0);
+    expect(seatTokens[0]!.status).toBe('active');
   });
 
   it('sem seat_token nada muda: o tenant nasce sem grupo', async () => {

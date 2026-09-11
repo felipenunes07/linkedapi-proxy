@@ -386,16 +386,27 @@ eventHooks.post('/billing', async (c) => {
   }
   if (!sub && customerId && clienteAncora) {
     // F2.29: com dois assentos do MESMO cliente (mesmo CPF, logo possivelmente
-    // o mesmo cadastro no Asaas), o cliente deixa de ser ancora unica. Puxa ate
-    // duas linhas: uma so, decide; mais de uma, so decide se exatamente uma
-    // ainda espera o primeiro pagamento (as demais ja tem assinatura e casam
-    // pelo id dela, acima). Empate NAO vira palpite: ativar o assento errado
-    // deixaria quem pagou sem conta e quem nao pagou com conta.
+    // o mesmo cadastro no Asaas), o cliente deixa de ser ancora unica. Uma
+    // linha so decide; mais de uma, so decide se exatamente uma ainda espera o
+    // primeiro pagamento (as demais ja tem assinatura e casam pelo id dela,
+    // acima). Empate NAO vira palpite: ativar o assento errado deixaria quem
+    // pagou sem conta e quem nao pagou com conta.
+    //
+    // SEM `limit` (review F2.31): a unicidade tem que ser avaliada sobre o
+    // conjunto inteiro. Com um teto de 2 linhas, "exatamente uma sem
+    // assinatura" podia ser verdade na amostra e mentira no banco.
+    //
+    // `canceled` FORA (review F2.31, o achado que mais dói): a nova tentativa
+    // do mesmo cliente (recarregou a pagina, trocou Pix por cartao; ate 5 por
+    // dia) deixa a linha anterior `canceled` com o mesmo cliente do Asaas e
+    // sem assinatura. Contando essas linhas, o primeiro pagamento de VERDADE
+    // de quem tem um assento so ja chegava ambiguo, era ignorado e nada
+    // reprocessava: cliente pago, assento nunca ativado.
     const candidatos = await supabaseSelect<BillingRow>(c.env, 'billing_subscriptions', {
       asaas_customer_id: `eq.${customerId}`,
       payment_method: 'eq.pix_automatic',
+      status: 'in.(pending,active,overdue)',
       select: 'tenant_id,asaas_customer_id,asaas_subscription_id,payment_method,status',
-      limit: '2',
     });
     if (candidatos.length === 1) {
       sub = candidatos[0];
@@ -404,7 +415,12 @@ eventHooks.post('/billing', async (c) => {
       if (semAssinatura.length === 1) {
         sub = semAssinatura[0];
       } else {
-        console.error('billing_ambiguous_customer');
+        // O dinheiro entrou e nada foi ativado: este e o log que o operador
+        // usa para reconciliar a mao, entao leva os uuids dos candidatos
+        // (nossos, nao do Asaas), como os sinais vizinhos ja fazem.
+        console.error(
+          `billing_ambiguous_customer: ${candidatos.map((x) => x.tenant_id).join(',')}`,
+        );
         return c.json({ ok: true, ignored: true });
       }
     }
