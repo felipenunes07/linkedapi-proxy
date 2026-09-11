@@ -47,7 +47,7 @@ app.get('/health', (c) => c.json({ ok: true }));
 //   GET /openapi.json -> a spec crua (Scalar consome daqui)
 //   GET /docs         -> HTML do Scalar apontando para /openapi.json
 app.get('/openapi.json', (c) => c.json(openapi));
-app.get('/docs', (c) => c.html(docsHtml));
+app.get('/docs', (c) => c.html(docsHtml(c.env)));
 
 // Callback da auto-conexao (Marco 4). Rota publica SEM X-API-KEY: a seguranca
 // vem do connect_token de uso unico + verificacao upstream (ver routes/connect).
