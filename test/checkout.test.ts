@@ -19,6 +19,9 @@ const inserted: { table: string; row: Record<string, unknown> }[] = [];
 let contasAtivas: { id: string; tenant_id?: string }[] = [];
 let pendentesRecentes: { tenant_id: string }[] = [];
 let filtroPendentes: Record<string, string> | null = null;
+// F2.29: tokens de assento e tenants de origem (o grupo do assento adicional).
+let seatTokens: Record<string, unknown>[] = [];
+let tenantsRows: Record<string, unknown>[] = [];
 
 // Vinculos gravados pelo checkout: o "banco" dos testes de nova tentativa.
 const vinculos = () =>
@@ -45,6 +48,21 @@ vi.mock('../src/lib/supabase', () => ({
       filtroPendentes = filters;
       return pendentesRecentes;
     }
+    if (table === 'portal_tokens') {
+      return seatTokens.filter(
+        (t) =>
+          `eq.${t.token_hash}` === filters.token_hash &&
+          (!filters.kind || `eq.${t.kind}` === filters.kind) &&
+          (!filters.status || `eq.${t.status}` === filters.status),
+      );
+    }
+    if (table === 'tenants') {
+      return tenantsRows.filter(
+        (t) =>
+          `eq.${t.id}` === filters.id &&
+          (!filters.status || `eq.${t.status}` === filters.status),
+      );
+    }
     return [];
   }),
   supabaseInsert: vi.fn(async (_env: Env, table: string, row: Record<string, unknown>) => {
@@ -59,6 +77,18 @@ vi.mock('../src/lib/supabase', () => ({
       filters: Record<string, string>,
       patch: Record<string, unknown>,
     ) => {
+      if (table === 'portal_tokens') {
+        // Consumo do token de assento: condicional (active -> used).
+        const alvo = seatTokens.filter(
+          (t) =>
+            `eq.${t.token_hash}` === filters.token_hash &&
+            `eq.${t.kind}` === filters.kind &&
+            `eq.${t.status}` === filters.status &&
+            (!filters.expires_at || String(t.expires_at) > filters.expires_at.slice(3)),
+        );
+        for (const t of alvo) Object.assign(t, patch);
+        return alvo;
+      }
       if (table !== 'billing_subscriptions') return [];
       const alvo = vinculos().filter(
         (r) =>
@@ -154,6 +184,8 @@ beforeEach(() => {
   contasAtivas = [];
   pendentesRecentes = [];
   filtroPendentes = null;
+  seatTokens = [];
+  tenantsRows = [];
   vi.clearAllMocks();
   errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 });
@@ -256,7 +288,7 @@ describe('POST /checkout, caminho feliz e ordem', () => {
     expect(body).toEqual({
       ok: true,
       data: {
-        value: 57,
+        value: 67,
         method: 'pix_automatic',
         pix: {
           image: 'BASE64IMG',
@@ -332,7 +364,7 @@ describe('POST /checkout, cartao recorrente no checkout hospedado (F2.25)', () =
 
     const args = vi.mocked(createCardCheckout).mock.calls[0]![1];
     expect(args).toMatchObject({
-      value: 57,
+      value: 67,
       externalReference: TENANT_ID,
       successUrl: 'https://site.example/painel?pagamento=cartao',
       cancelUrl: 'https://site.example/#assinar',
@@ -602,5 +634,93 @@ describe('POST /checkout, falhas e abusos', () => {
       { ip: '5.5.5.5' },
     );
     expect(vitima.status).toBe(200);
+  });
+});
+
+// F2.29: o MESMO checkout vende o assento adicional. O que estes testes
+// seguram: o token de assento (uso unico, autenticado no painel) e a unica
+// coisa que poe o tenant novo num grupo, e a segunda compra NAO encerra a
+// venda que o cliente ja tem de pe (o lock passa a ser por intencao).
+describe('POST /checkout, assento adicional (F2.29)', () => {
+  const SEAT_TOKEN = `lk_seat_${'c'.repeat(64)}`;
+
+  beforeEach(async () => {
+    seatTokens = [
+      {
+        id: 'st-1',
+        tenant_id: 'tenant-origem',
+        token_hash: await hashApiKey(SEAT_TOKEN),
+        kind: 'seat',
+        status: 'active',
+        expires_at: '2099-01-01T00:00:00.000Z',
+      },
+    ];
+    tenantsRows = [
+      { id: 'tenant-origem', name: 'Maria Souza', group_id: null, status: 'active', created_at: '2026-09-01T00:00:00.000Z' },
+    ];
+  });
+
+  it('com seat_token valido: tenant novo nasce no grupo, token vira usado e a origem entra no grupo', async () => {
+    const res = await post(corpo({ seat_token: SEAT_TOKEN } as never), baseEnv());
+    expect(res.status).toBe(200);
+
+    const tenant = inserted.find((i) => i.table === 'tenants')!;
+    expect(tenant.row.group_id).toBe('tenant-origem');
+    expect(seatTokens[0]!.status).toBe('used');
+    // A origem tambem passa a carregar o grupo, senao a lista so veria o novo.
+    expect(supabaseUpdate).toHaveBeenCalledWith(
+      expect.anything(),
+      'tenants',
+      { id: 'eq.tenant-origem', group_id: 'is.null' },
+      { group_id: 'tenant-origem' },
+    );
+  });
+
+  it('o segundo assento NAO encerra a venda que o cliente ja tem (lock por intencao)', async () => {
+    const env = baseEnv();
+    const primeira = await post(BODY_OK, env);
+    expect(primeira.status).toBe(200);
+    vi.mocked(cancelPixAutomaticAuthorization).mockClear();
+
+    // Mesmo e-mail e mesmo CPF: sem o token, isto cairia no lock da primeira
+    // venda e a encerraria (review F2.25, #5).
+    const segunda = await post(corpo({ seat_token: SEAT_TOKEN } as never), env);
+    expect(segunda.status).toBe(200);
+    expect(cancelPixAutomaticAuthorization).not.toHaveBeenCalled();
+    expect(inserted.filter((i) => i.table === 'tenants')).toHaveLength(2);
+  });
+
+  it('token usado, vencido, de tenant apagado ou inventado: 401 sem criar nada', async () => {
+    seatTokens[0]!.status = 'used';
+    const usado = await post(corpo({ seat_token: SEAT_TOKEN } as never), baseEnv());
+    expect(usado.status).toBe(401);
+    expect(await usado.json()).toEqual({ error: 'invalid_seat_token' });
+    expect(inserted).toHaveLength(0);
+    expect(createCustomer).not.toHaveBeenCalled();
+
+    seatTokens[0]!.status = 'active';
+    seatTokens[0]!.expires_at = '2000-01-01T00:00:00.000Z';
+    const vencido = await post(corpo({ seat_token: SEAT_TOKEN, email: 'outra@example.com' } as never), baseEnv());
+    expect(vencido.status).toBe(401);
+
+    seatTokens = [];
+    const inventado = await post(corpo({ seat_token: `lk_seat_${'d'.repeat(64)}` } as never), baseEnv());
+    expect(inventado.status).toBe(401);
+    expect(inserted).toHaveLength(0);
+  });
+
+  it('seat_token fora do formato: 400, antes de qualquer escrita', async () => {
+    const res = await post(corpo({ seat_token: 'nao-e-token' } as never), baseEnv());
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid_seat_token' });
+    expect(inserted).toHaveLength(0);
+    expect(createCustomer).not.toHaveBeenCalled();
+  });
+
+  it('sem seat_token nada muda: o tenant nasce sem grupo', async () => {
+    const res = await post(BODY_OK, baseEnv());
+    expect(res.status).toBe(200);
+    const tenant = inserted.find((i) => i.table === 'tenants')!;
+    expect(tenant.row).not.toHaveProperty('group_id');
   });
 });

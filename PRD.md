@@ -24,12 +24,12 @@ Este projeto move a Playbook Lab de "agência de serviços + comunidade de educa
 ---
 ## 2. Modelo de negócio e economia
 > Esta seção documenta o racional comercial. **Billing não faz parte da V1** (ver Objetivos da V1), mas a economia orienta as decisões.
-- **Preço ao cliente (alvo):** R$57/mês por seat (1 seat = 1 conta de LinkedIn conectada).
+- **Preço ao cliente (alvo):** R$67/mês por seat (1 seat = 1 conta de LinkedIn conectada).
 - **Custo por conta na Unipile:** ~€5/mês (~R$29 ao câmbio de ~R$5,77/€ em jul/2026).
-- **Margem bruta por cliente:** ~R$28/mês, antes de taxas do gateway de pagamento e do custo de tempo/suporte.
+- **Margem bruta por cliente:** ~R$38/mês, antes de taxas do gateway de pagamento e do custo de tempo/suporte.
 - **Piso de custo:** €49/mês (~R$283) fixo, independente do número de contas até 10.
-- **Breakeven:** ~6 clientes pagantes. Abaixo disso, a operação subsidia o piso e opera no prejuízo.
-- **Comportamento acima de 10 contas:** custo passa a ~€5 linear por conta adicional; a margem por cliente estabiliza em ~R$28.
+- **Breakeven:** ~5 clientes pagantes (R$283 de piso / R$67). Abaixo disso, a operação subsidia o piso e opera no prejuízo.
+- **Comportamento acima de 10 contas:** custo passa a ~€5 linear por conta adicional; a margem por cliente estabiliza em ~R$38.
 **Implicação de negócio:** a meta inicial não é "validar com 3 pessoas" — é **lotar rapidamente os primeiros ~10 seats** para sair do subsídio do piso. O lucro depende de volume, não de qualquer ganho de arbitragem entre estar dentro ou fora dos 10 slots (o custo por slot é praticamente plano em ~€5).
 ---
 ## 3. Princípios e restrições
@@ -149,6 +149,8 @@ OpenAPI spec dos 3 endpoints, renderizado com Scalar. Forma simples de emitir/re
 - **Reconexão automatizada:** ✅ em código. Webhook de status de conta detecta a queda, marca a conta como desconectada e envia ao cliente o evento `account.disconnected` já com um link de reconexão auto-gerado (uso único, 24h).
 - **Painel admin (operador):** parcialmente. API read-only `/admin/tenants|usage|capacity` (inclui medidor de seats da conta-mestra e uso persistente por dia). UI e alertas de abuso: pendente.
 - **Planos/limites por tenant e self-service mínimo:** ✅ em código (overrides de limite no banco; rotação de chave e webhook pelo próprio cliente).
+- **Assentos adicionais e painel em dashboard (F2.29):** ✅ em código. 1 assento = 1 tenant (assinatura, conta e chave próprias); os assentos do mesmo cliente ficam agrupados e aparecem numa lista no painel, com troca entre eles. A segunda conta é contratada pelo MESMO checkout, a partir de um token de uso único emitido no painel.
+- **Tela de conexão no nosso domínio (F2.30):** ✅ em código, aguardando domínio próprio (CNAME + certificado emitido pela origem).
 - **Ainda fora:** painel/inbox do cliente com UI, onboarding self-service completo (cadastro → pagamento → conexão → primeira chave), expansão de endpoints e comercialização.
 ---
 ## 11. Riscos e mitigações
@@ -164,7 +166,7 @@ OpenAPI spec dos 3 endpoints, renderizado com Scalar. Forma simples de emitir/re
 ## 12. Perguntas em aberto
 - Domínio da API: registrar `linkedapi.com.br` (o nome LinkedAPI já está em uso nos docs e na spec).
 - Infra do banco: o projeto Supabase do Marco 2 saiu do ar (ver docs/decisoes.md, "Em aberto"); restaurar ou criar novo e aplicar as migrations 0001-0007 (supabase/bootstrap.sql).
-- Taxa efetiva do Asaas no ticket de R$57 (impacta margem; relevante só na fase 2).
+- Taxa efetiva do Asaas no ticket de R$67 (impacta margem; relevante só na fase 2).
 - Resolvidas: valores default do rate limiter (M3.5: 80 mensagens/dia, 30 convites/dia) e provedor do contador (M3.4: Cloudflare KV).
 ---
 ## 13. Referências

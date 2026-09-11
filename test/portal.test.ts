@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { Env } from '../src/types';
 import { memoryKV } from './helpers';
 import { hashApiKey } from '../src/lib/hash';
+import { seatRef } from '../src/lib/portal';
 
 // Painel do cliente (F2.20 + endurecimento F2.21): o cliente conecta o
 // LinkedIn e gera a chave sem operador. Provam: a SESSAO do painel decide o
@@ -724,5 +725,196 @@ describe('POST /portal/login', () => {
     await vi.waitFor(() => expect(sendEmail).toHaveBeenCalledTimes(3));
     await new Promise((r) => setTimeout(r, 20));
     expect(sendEmail).toHaveBeenCalledTimes(3);
+  });
+});
+
+// F2.29: assentos adicionais. 1 assento = 1 tenant; o grupo so liga os
+// assentos do mesmo cliente para o painel listar e alternar. O que estes
+// testes seguram: nenhum tenant_id sai na resposta, a troca so alcanca o
+// PROPRIO grupo, o token de assento e de uso unico e so hash no banco, e
+// contratar mais um exige assinatura ativa e vaga na conta-mestra.
+describe('portal: assentos (F2.29)', () => {
+  async function grupoDeDois() {
+    // tA e tC no mesmo grupo (tA abriu). tC ja conectou o LinkedIn.
+    db.tenants!.push({
+      id: 'tC',
+      name: 'Cliente A',
+      status: 'active',
+      contact_email: 'a@example.com',
+      group_id: 'tA',
+      daily_message_limit: null,
+      daily_invitation_limit: null,
+      created_at: '2026-09-05T00:00:00.000Z',
+    });
+    for (const t of db.tenants!) if (t.id === 'tA') t.group_id = 'tA';
+    db.billing_subscriptions!.push({ tenant_id: 'tC', status: 'active', asaas_customer_id: 'cus_A' });
+    db.connected_accounts!.push({
+      id: 'ca-c',
+      tenant_id: 'tC',
+      unipile_account_id: 'ua-c',
+      provider: 'linkedin',
+      status: 'active',
+      label: 'Fulano de Tal',
+      created_at: '2026-09-06T00:00:00.000Z',
+    });
+  }
+
+  it('lista so o proprio assento quando o cliente tem um so', async () => {
+    const res = await req('/portal/seats', { token: TOKEN_A });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { data: { seats: Row[] } };
+    expect(body.data.seats).toHaveLength(1);
+    expect(body.data.seats[0]).toMatchObject({ current: true, position: 1, linkedin: 'none' });
+  });
+
+  it('lista os dois assentos do grupo, com rotulo e estado de cada um, e sem tenant_id', async () => {
+    await grupoDeDois();
+    const res = await req('/portal/seats', { token: TOKEN_A });
+    expect(res.status).toBe(200);
+    const texto = await res.text();
+    expect(texto).not.toContain('tA');
+    expect(texto).not.toContain('tC');
+    expect(texto).not.toContain('ua-c');
+    const body = JSON.parse(texto) as { data: { seats: Row[] } };
+    expect(body.data.seats).toHaveLength(2);
+    expect(body.data.seats[0]).toMatchObject({ current: true, position: 1, linkedin: 'none', label: null });
+    expect(body.data.seats[1]).toMatchObject({
+      current: false,
+      position: 2,
+      linkedin: 'active',
+      label: 'Fulano de Tal',
+      subscription: 'active',
+    });
+    expect(String(body.data.seats[1]!.ref)).toMatch(/^[0-9a-f]{24}$/);
+  });
+
+  it('trocar de assento devolve uma sessao NOVA, que vale para o outro assento', async () => {
+    await grupoDeDois();
+    const env = baseEnv();
+    const lista = (await (
+      await req('/portal/seats', { token: TOKEN_A }, env)
+    ).json()) as { data: { seats: Row[] } };
+    const alvo = lista.data.seats.find((s) => s.current === false)!;
+
+    const res = await req(
+      '/portal/switch',
+      { method: 'POST', token: TOKEN_A, body: { ref: alvo.ref } },
+      env,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { data: { token: string } };
+    expect(body.data.token).toMatch(/^lk_portal_[0-9a-f]{64}$/);
+    // O token em claro nunca entra no banco.
+    expect(JSON.stringify(db.portal_tokens)).not.toContain(body.data.token);
+
+    // A sessao nova enxerga o OUTRO assento (o que ja tem LinkedIn ativo).
+    const status = (await (
+      await req('/portal/status', { token: body.data.token }, env)
+    ).json()) as { data: Row };
+    expect(status.data.linkedin).toBe('active');
+  });
+
+  it('ref de assento de OUTRO cliente nao troca nada: 404', async () => {
+    await grupoDeDois();
+    const refDoOutro = await seatRef('tB');
+    const res = await req('/portal/switch', {
+      method: 'POST',
+      token: TOKEN_A,
+      body: { ref: refDoOutro },
+    });
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: 'seat_not_found' });
+  });
+
+  it('ref do proprio assento: 409, e ref malformada: 400', async () => {
+    const propria = await seatRef('tA');
+    const r1 = await req('/portal/switch', { method: 'POST', token: TOKEN_A, body: { ref: propria } });
+    expect(r1.status).toBe(409);
+    const r2 = await req('/portal/switch', { method: 'POST', token: TOKEN_A, body: { ref: 'nao-e-ref' } });
+    expect(r2.status).toBe(400);
+    const r3 = await req('/portal/switch', {
+      method: 'POST',
+      token: TOKEN_A,
+      body: 'ref=x',
+      contentType: 'text/plain',
+    });
+    expect(r3.status).toBe(415);
+  });
+
+  it('assento novo exige assinatura ativa e devolve token de uso unico (so o hash no banco)', async () => {
+    for (const b of db.billing_subscriptions!) if (b.tenant_id === 'tA') b.status = 'pending';
+    const negado = await req('/portal/seat', { method: 'POST', token: TOKEN_A });
+    expect(negado.status).toBe(402);
+
+    for (const b of db.billing_subscriptions!) if (b.tenant_id === 'tA') b.status = 'active';
+    const res = await req('/portal/seat', { method: 'POST', token: TOKEN_A });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { data: { seat_token: string } };
+    expect(body.data.seat_token).toMatch(/^lk_seat_[0-9a-f]{64}$/);
+    const linha = db.portal_tokens!.find((t) => t.kind === 'seat')!;
+    expect(linha.tenant_id).toBe('tA');
+    expect(linha.status).toBe('active');
+    expect(linha.token_hash).toBe(await hashApiKey(body.data.seat_token));
+    expect(JSON.stringify(db.portal_tokens)).not.toContain(body.data.seat_token);
+  });
+
+  it('sem vaga na conta-mestra nao vende assento novo: 503', async () => {
+    const res = await req('/portal/seat', { method: 'POST', token: TOKEN_A }, baseEnv({ SEAT_CAP: '2' }));
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: 'sold_out' });
+  });
+
+  it('teto de tokens de assento por tenant', async () => {
+    const env = baseEnv();
+    for (let i = 0; i < 10; i++) {
+      const ok = await req('/portal/seat', { method: 'POST', token: TOKEN_A }, env);
+      expect(ok.status).toBe(200);
+    }
+    const excesso = await req('/portal/seat', { method: 'POST', token: TOKEN_A }, env);
+    expect(excesso.status).toBe(429);
+  });
+});
+
+// F2.30: dominio proprio na tela de conexao. O cliente nunca precisa ver a
+// marca da origem: o wizard e o MESMO (CNAME + certificado emitido por eles),
+// so o host do link muda. Sem a var configurada, nada muda.
+describe('portal: dominio proprio da tela de conexao (F2.30)', () => {
+  it('com UNIPILE_AUTH_HOST, o link sai no NOSSO dominio, com o mesmo caminho', async () => {
+    const res = await req(
+      '/portal/connect',
+      { method: 'POST', token: TOKEN_A },
+      baseEnv({ UNIPILE_AUTH_HOST: 'auth.playbookapi.com.br' }),
+    );
+    expect(res.status).toBe(200);
+    const texto = await res.text();
+    expect(texto).not.toContain('wizard.example');
+    const body = JSON.parse(texto) as { data: { url: string } };
+    expect(body.data.url).toBe('https://auth.playbookapi.com.br/xyz');
+  });
+
+  it('aceita a var com esquema colado e ignora valor que nao e host', async () => {
+    const comEsquema = await req(
+      '/portal/connect',
+      { method: 'POST', token: TOKEN_A },
+      baseEnv({ UNIPILE_AUTH_HOST: 'https://auth.playbookapi.com.br' }),
+    );
+    const b1 = (await comEsquema.json()) as { data: { url: string } };
+    expect(b1.data.url).toBe('https://auth.playbookapi.com.br/xyz');
+
+    // Valor quebrado NAO derruba a conexao de quem ja pagou: cai no link
+    // original, que funciona (falha aberta, com sinal interno).
+    const quebrado = await req(
+      '/portal/connect',
+      { method: 'POST', token: TOKEN_A },
+      baseEnv({ UNIPILE_AUTH_HOST: 'nao e host' }),
+    );
+    const b2 = (await quebrado.json()) as { data: { url: string } };
+    expect(b2.data.url).toBe('https://wizard.example/xyz');
+  });
+
+  it('sem a var, o link continua como a origem devolveu', async () => {
+    const res = await req('/portal/connect', { method: 'POST', token: TOKEN_A });
+    const body = (await res.json()) as { data: { url: string } };
+    expect(body.data.url).toBe('https://wizard.example/xyz');
   });
 });

@@ -14,8 +14,12 @@ import {
   resolvePortalToken,
   exchangeLinkToken,
   createConnectLink,
+  createPortalToken,
+  createSeatToken,
   enviarLinkDeAcesso,
+  seatRef,
   seatsInUse,
+  tenantsDoGrupo,
   type PortalSession,
 } from '../lib/portal';
 
@@ -57,7 +61,12 @@ const MAX_EMAIL = 150;
 const DEFAULT_SEAT_CAP = 10;
 const KEY_LOCK_TTL_SECONDS = 60;
 const MAX_WEBHOOK_CHANGES_PER_TENANT = 20;
+const MAX_SEAT_TOKENS_PER_TENANT = 10;
+const MAX_SWITCH_PER_TENANT = 60;
+// O token de assento so precisa viver da decisao ate o checkout terminar.
+const SEAT_TOKEN_TTL_MS = 30 * 60 * 1000;
 const LINK_TOKEN_FORMAT = /^lk_plink_[0-9a-f]{64}$/;
+const SEAT_REF_FORMAT = /^[0-9a-f]{24}$/;
 
 interface AccountRow {
   unipile_account_id: string;
@@ -82,13 +91,21 @@ type LinkedinState =
   | { state: 'disconnected'; accountId: string };
 
 // Estado do LinkedIn do tenant a partir das linhas (mais recente primeiro).
-// 1 seat = 1 conta: ativa vence; pausa (billing) vem antes de desconexao.
+// 1 assento = 1 conta: ativa vence; pausa (billing) vem antes de desconexao.
+// Separado do accountId de proposito: a lista de assentos (F2.29) precisa do
+// estado sem NUNCA carregar o id da origem nas linhas que consulta.
+function estadoDasContas(rows: { status: string }[]): LinkedinState['state'] {
+  if (rows.some((r) => r.status === 'active')) return 'active';
+  if (rows.some((r) => r.status === 'paused')) return 'paused';
+  if (rows.some((r) => r.status === 'disconnected')) return 'disconnected';
+  return 'none';
+}
+
 function linkedinState(rows: AccountRow[]): LinkedinState {
-  if (rows.some((r) => r.status === 'active')) return { state: 'active' };
-  if (rows.some((r) => r.status === 'paused')) return { state: 'paused' };
-  const recente = rows.find((r) => r.status === 'disconnected');
-  if (recente) return { state: 'disconnected', accountId: recente.unipile_account_id };
-  return { state: 'none' };
+  const state = estadoDasContas(rows);
+  if (state !== 'disconnected') return { state };
+  const recente = rows.find((r) => r.status === 'disconnected')!;
+  return { state, accountId: recente.unipile_account_id };
 }
 
 async function subscriptionStatus(env: Env, tenantId: string): Promise<string> {
@@ -430,6 +447,160 @@ portal.put('/email', async (c) => {
     { contact_email: normalizado },
   );
   return c.json({ ok: true, data: { email: normalizado } });
+});
+
+// ---------------------------------------------------------------------------
+// Assentos (F2.29). 1 assento = 1 tenant (assinatura, conta e chave proprias);
+// o grupo so liga os assentos do MESMO cliente para o painel listar e alternar.
+//
+//   GET  /portal/seats   contas do grupo, com status de cada uma
+//   POST /portal/seat    token de uso unico que autoriza um assento a mais
+//   POST /portal/switch  troca a sessao para outro assento do mesmo grupo
+// ---------------------------------------------------------------------------
+
+interface SeatAccountRow {
+  tenant_id: string;
+  status: string;
+  label: string | null;
+  created_at: string;
+}
+
+interface SeatBillingRow {
+  tenant_id: string;
+  status: string;
+}
+
+// Lista as contas do grupo. Nenhum tenant_id sai daqui: cada assento e
+// nomeado pela `ref` (hash truncado), que so serve para o /switch do proprio
+// grupo. Rotulo: o nome do perfil que a origem confirmou na conexao; sem ele
+// (ainda nao conectou), a posicao na lista.
+portal.get('/seats', async (c) => {
+  const s = await gate(c);
+  if (s instanceof Response) return s;
+
+  const tenants = await tenantsDoGrupo(c.env, s.tenantId);
+  if (tenants.length === 0) {
+    return c.json({ error: 'invalid_portal_token' }, 401);
+  }
+  const ids = tenants.map((t) => t.id);
+  const [contas, assinaturas] = await Promise.all([
+    supabaseSelect<SeatAccountRow>(c.env, 'connected_accounts', {
+      tenant_id: `in.(${ids.join(',')})`,
+      provider: 'eq.linkedin',
+      select: 'tenant_id,status,label,created_at',
+      order: 'created_at.desc',
+    }),
+    supabaseSelect<SeatBillingRow>(c.env, 'billing_subscriptions', {
+      tenant_id: `in.(${ids.join(',')})`,
+      select: 'tenant_id,status',
+    }),
+  ]);
+
+  const seats = await Promise.all(
+    tenants.map(async (t, i) => {
+      const doTenant = contas.filter((a) => a.tenant_id === t.id);
+      const estado = estadoDasContas(doTenant);
+      // A conta que decide o estado e a que o painel mostra: ativa primeiro,
+      // senao a mais recente (a lista ja vem por created_at desc).
+      const principal =
+        doTenant.find((a) => a.status === 'active') ??
+        doTenant.find((a) => a.status === estado) ??
+        doTenant[0];
+      return {
+        ref: await seatRef(t.id),
+        current: t.id === s.tenantId,
+        position: i + 1,
+        label: principal?.label ?? null,
+        linkedin: estado,
+        subscription:
+          assinaturas.find((b) => b.tenant_id === t.id)?.status ?? 'none',
+        connected_at: principal?.created_at ?? null,
+      };
+    }),
+  );
+  return c.json({ ok: true, data: { seats } });
+});
+
+// Autoriza a compra de um assento a mais: devolve um token de uso unico que o
+// checkout exige para criar o tenant novo JA dentro deste grupo. Sem ele o
+// checkout cria uma conta solta, como sempre fez.
+//
+// So quem tem assinatura ativa contrata outro assento: senao o "adicionar
+// conta" viraria um caminho de compra sem pagar o primeiro.
+portal.post('/seat', async (c) => {
+  const s = await gate(c);
+  if (s instanceof Response) return s;
+
+  if ((await subscriptionStatus(c.env, s.tenantId)) !== 'active') {
+    return c.json({ error: 'payment_required' }, 402);
+  }
+  const tentativas = await bumpAttempts(
+    c.env.RATE_LIMIT,
+    attemptKey('portal-seat', s.tenantId),
+  );
+  if (tentativas > MAX_SEAT_TOKENS_PER_TENANT) {
+    return c.json({ error: 'rate_limited' }, 429);
+  }
+
+  // Assento novo ocupa vaga nova na conta-mestra: o teto vale igual ao do
+  // primeiro checkout. Aqui o assento AINDA nao existe, entao estourou quando
+  // os ocupados ja alcancaram o teto.
+  const seatCap = Number(c.env.SEAT_CAP ?? DEFAULT_SEAT_CAP);
+  if (Number.isFinite(seatCap) && (await seatsInUse(c.env)) >= seatCap) {
+    console.error('portal_seat_sold_out');
+    return c.json({ error: 'sold_out' }, 503);
+  }
+
+  const criado = await createSeatToken(c.env, s.tenantId, SEAT_TOKEN_TTL_MS);
+  return c.json({
+    ok: true,
+    data: { seat_token: criado.token, expires_at: criado.expiresAt },
+  });
+});
+
+// Troca a sessao para outro assento DO MESMO GRUPO. A autorizacao vem da
+// sessao atual: so um assento do grupo dela pode ser alvo, e a `ref` nao e
+// reversivel para quem nao conhece o uuid. A sessao atual continua valida (o
+// cliente pode voltar); quem quiser encerrar tudo usa "sair de todos".
+portal.post('/switch', async (c) => {
+  const s = await gate(c);
+  if (s instanceof Response) return s;
+
+  const semJson = jsonExigido(c);
+  if (semJson) return semJson;
+  const body = await lerCorpo(c);
+  const ref = body?.ref;
+  if (typeof ref !== 'string' || !SEAT_REF_FORMAT.test(ref)) {
+    return c.json({ error: 'invalid_seat' }, 400);
+  }
+  const tentativas = await bumpAttempts(
+    c.env.RATE_LIMIT,
+    attemptKey('portal-switch', s.tenantId),
+  );
+  if (tentativas > MAX_SWITCH_PER_TENANT) {
+    return c.json({ error: 'rate_limited' }, 429);
+  }
+
+  const tenants = await tenantsDoGrupo(c.env, s.tenantId);
+  let alvo: string | null = null;
+  for (const t of tenants) {
+    if ((await seatRef(t.id)) === ref) {
+      alvo = t.id;
+      break;
+    }
+  }
+  if (!alvo) {
+    return c.json({ error: 'seat_not_found' }, 404);
+  }
+  if (alvo === s.tenantId) {
+    return c.json({ error: 'already_current' }, 409);
+  }
+
+  const sessao = await createPortalToken(c.env, alvo);
+  return c.json({
+    ok: true,
+    data: { token: sessao.token, expires_at: sessao.expiresAt },
+  });
 });
 
 // Sair: revoga a sessao usada. Com { "all": true }, revoga TODAS as

@@ -385,10 +385,29 @@ eventHooks.post('/billing', async (c) => {
     sub = await buscar({ asaas_subscription_id: `eq.${subscriptionId}` });
   }
   if (!sub && customerId && clienteAncora) {
-    sub = await buscar({
+    // F2.29: com dois assentos do MESMO cliente (mesmo CPF, logo possivelmente
+    // o mesmo cadastro no Asaas), o cliente deixa de ser ancora unica. Puxa ate
+    // duas linhas: uma so, decide; mais de uma, so decide se exatamente uma
+    // ainda espera o primeiro pagamento (as demais ja tem assinatura e casam
+    // pelo id dela, acima). Empate NAO vira palpite: ativar o assento errado
+    // deixaria quem pagou sem conta e quem nao pagou com conta.
+    const candidatos = await supabaseSelect<BillingRow>(c.env, 'billing_subscriptions', {
       asaas_customer_id: `eq.${customerId}`,
       payment_method: 'eq.pix_automatic',
+      select: 'tenant_id,asaas_customer_id,asaas_subscription_id,payment_method,status',
+      limit: '2',
     });
+    if (candidatos.length === 1) {
+      sub = candidatos[0];
+    } else if (candidatos.length > 1) {
+      const semAssinatura = candidatos.filter((x) => !x.asaas_subscription_id);
+      if (semAssinatura.length === 1) {
+        sub = semAssinatura[0];
+      } else {
+        console.error('billing_ambiguous_customer');
+        return c.json({ ok: true, ignored: true });
+      }
+    }
   }
   // Review F2.25 (#2): checkoutSession nao esta no payload DOCUMENTADO do
   // webhook. Cobranca que nao casou com nada: pergunta ao Asaas de qual sessao

@@ -50,6 +50,22 @@ interface UnipileAccount {
   created_at?: string;
 }
 
+// Rotulo da conta para a lista do painel (F2.29): o nome do perfil que a
+// ORIGEM confirma, nunca o id dela. Quando a origem ainda devolve o nosso
+// token no `name` (fast-path da ancora), nao ha nome de perfil: fica sem
+// rotulo e o painel mostra a posicao ("Conta 2"). Texto de terceiro, entao
+// entra higienizado e curto: e exibido no painel do cliente.
+function rotuloDaConta(nomeNaOrigem: string | undefined, tokenEnviado: string): string | null {
+  if (typeof nomeNaOrigem !== 'string' || nomeNaOrigem === tokenEnviado) {
+    return null;
+  }
+  const limpo = nomeNaOrigem
+    .replace(/[\p{Cc}]/gu, ' ')
+    .trim()
+    .slice(0, 80);
+  return limpo.length > 0 ? limpo : null;
+}
+
 // Folga de relogio entre o nosso banco e a Unipile na ancora temporal do
 // create (ver comentario no uso). Curta de proposito.
 const ANCHOR_CLOCK_SKEW_MS = 60 * 1000;
@@ -153,6 +169,8 @@ connectHooks.post('/', async (c) => {
     return c.json({ error: 'account_verification_failed' }, 401);
   }
 
+  const rotulo = rotuloDaConta(account.name, name);
+
   if (token.purpose === 'reconnect') {
     // Reconexao NUNCA vincula conta nova: so reativa a conta que o proprio
     // tenant ja tem. account_id do payload fora disso e rejeicao.
@@ -181,7 +199,10 @@ connectHooks.post('/', async (c) => {
       'connected_accounts',
       { id: `eq.${row.id}`, tenant_id: `eq.${token.tenant_id}` },
       // Reconectar nao fura a inadimplencia (review F2.25, #3).
-      { status: await statusAoReativar(c.env, token.tenant_id) },
+      {
+        status: await statusAoReativar(c.env, token.tenant_id),
+        ...(rotulo ? { label: rotulo } : {}),
+      },
     );
     return c.json({ ok: true });
   }
@@ -259,6 +280,7 @@ connectHooks.post('/', async (c) => {
       unipile_account_id: account_id,
       provider: 'linkedin',
       status: await statusAoReativar(c.env, token.tenant_id),
+      label: rotulo,
     });
   } catch (err) {
     // Corrida com outro notify: o unique do banco (migration 0002) decide.

@@ -271,6 +271,21 @@ describe('POST /hooks/connect (create)', () => {
     // Vinculo por ancora temporal gera o sinal interno de auditoria.
     const lines = errorSpy.mock.calls.map((call) => String(call[0]));
     expect(lines.some((l) => l.includes('connect_anchor_temporal'))).toBe(true);
+    // F2.29: o nome do perfil vira o rotulo da conta na lista do painel.
+    expect(accountRow(UA_NOVA)?.label).toBe('Perfil Renomeado');
+  });
+
+  it('F2.29: o nosso token NUNCA vira rotulo da conta no painel', async () => {
+    vi.mocked(getAccount).mockResolvedValue(linkedinAccount(TOKEN_A));
+    const res = await notify({
+      status: 'CREATION_SUCCESS',
+      account_id: UA_NOVA,
+      name: TOKEN_A,
+    });
+    expect(res.status).toBe(200);
+    // name ainda e o token (a origem nao renomeou): sem rotulo, e o painel
+    // mostra a posicao no lugar.
+    expect(accountRow(UA_NOVA)?.label).toBeNull();
   });
 
   it('M4.11: conta PRE-EXISTENTE (criada ANTES do token, name diferente): 401, nada e gravado', async () => {

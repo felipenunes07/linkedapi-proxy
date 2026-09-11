@@ -12,7 +12,14 @@ import {
   cancelCardCheckout,
 } from '../lib/asaas';
 import { encerrarCheckout, pendentePorAncora } from '../lib/limpeza';
-import { createPortalToken, seatsInUse, portalUrl } from '../lib/portal';
+import {
+  consumirSeatToken,
+  createPortalToken,
+  garantirGrupo,
+  lerSeatToken,
+  portalUrl,
+  seatsInUse,
+} from '../lib/portal';
 
 // Checkout proprio (F2.14, reformulado em F2.18 e F2.25): o cliente assina com
 // PIX AUTOMATICO na nossa tela ou com CARTAO RECORRENTE no checkout hospedado
@@ -52,7 +59,7 @@ const MAX_ATTEMPTS_GLOBAL = 60;
 // encerrada), e o fluxo legitimo "Pix -> cartao -> voltei do Asaas" ja usa 3.
 const MAX_ATTEMPTS_PER_DOC = 5;
 const LOCK_TTL_SECONDS = 15 * 60;
-const DEFAULT_PRICE_BRL = 57;
+const DEFAULT_PRICE_BRL = 67;
 const DEFAULT_SEAT_CAP = 10;
 // Validade do QR do Pix Automatico (immediateQrCode.expirationSeconds em
 // lib/asaas.ts). Checkout pendente dentro dela ainda "segura" um seat.
@@ -60,6 +67,7 @@ const PIX_VALIDADE_MS = 60 * 60 * 1000;
 
 const MAX_NAME = 100;
 const MAX_EMAIL = 150;
+const SEAT_TOKEN_FORMAT = /^lk_seat_[0-9a-f]{64}$/;
 
 interface TenantRow {
   id: string;
@@ -154,7 +162,10 @@ checkout.post('/', async (c) => {
     return c.json({ error: 'invalid_json' }, 400);
   }
 
-  const { name, email, cpf_cnpj, payment_method } = (body ?? {}) as Record<string, unknown>;
+  const { name, email, cpf_cnpj, payment_method, seat_token } = (body ?? {}) as Record<
+    string,
+    unknown
+  >;
 
   // F2.25: Pix Automatico (padrao) ou cartao recorrente no checkout HOSPEDADO
   // do Asaas. Qualquer outro valor e recusado antes de tocar em qualquer coisa.
@@ -185,7 +196,37 @@ checkout.post('/', async (c) => {
     return c.json({ error: 'invalid_document' }, 400);
   }
 
-  const lockKey = `checkout:lock:${await hashApiKey(`${emailNorm}|${documento}`)}`;
+  // ASSENTO ADICIONAL (F2.29): com um seat_token valido, esta venda cria mais
+  // um assento DENTRO do grupo de quem pediu no painel, em vez de uma conta
+  // solta. O token e a unica coisa que forma grupo: e de uso unico, so nasce
+  // em rota autenticada e so e lido aqui (nunca por e-mail igual).
+  if (seat_token !== undefined && typeof seat_token !== 'string') {
+    return c.json({ error: 'invalid_seat_token' }, 400);
+  }
+  let assento: { tenantId: string; groupId: string } | null = null;
+  if (typeof seat_token === 'string') {
+    if (!SEAT_TOKEN_FORMAT.test(seat_token)) {
+      return c.json({ error: 'invalid_seat_token' }, 400);
+    }
+    assento = await lerSeatToken(c.env, seat_token);
+    if (!assento) {
+      return c.json({ error: 'invalid_seat_token' }, 401);
+    }
+  }
+
+  // O lock e por INTENCAO, nao so por pessoa: no assento adicional ele e do
+  // TOKEN, senao a segunda compra cairia no lock da primeira e encerraria a
+  // venda que ja esta de pe (review F2.25, #5, que existe para "recarreguei a
+  // pagina", nao para "quero outra conta").
+  //
+  // Por token, e nao por grupo: com o lock do grupo, quem acabasse de pagar o
+  // assento 2 ficaria uma hora sem conseguir contratar o 3o (a ancora do
+  // checkout pago nao pode ser encerrada, e a resposta viraria 409). Cada
+  // pedido do painel e uma intencao propria; o uso unico do token e o que
+  // impede a mesma intencao virar duas vendas.
+  const lockKey = assento
+    ? `checkout:seat:lock:${await hashApiKey(seat_token as string)}`
+    : `checkout:lock:${await hashApiKey(`${emailNorm}|${documento}`)}`;
   // Chaves de KV nunca carregam dado pessoal em claro: sempre o hash.
   const chaveDoc = attemptKey('checkout-doc', await hashApiKey(documento));
   const lockAtual = await kv.get(lockKey);
@@ -276,13 +317,20 @@ checkout.post('/', async (c) => {
     }
   }
 
-  // Passo 2: tenant.
+  // Passo 2: tenant. No assento adicional, o token e queimado AQUI (uso unico,
+  // condicional no banco): e o ultimo ponto antes de existir tenant novo, e
+  // nenhuma corrida cria dois assentos com o mesmo token.
+  if (assento && !(await consumirSeatToken(c.env, seat_token as string))) {
+    await liberarLock();
+    return c.json({ error: 'invalid_seat_token' }, 401);
+  }
   let tenantId: string;
   try {
     const rows = await supabaseInsert<TenantRow>(c.env, 'tenants', {
       name: name.trim(),
       status: 'active',
       contact_email: emailNorm,
+      ...(assento ? { group_id: assento.groupId } : {}),
     });
     const created = rows[0];
     if (!created?.id) {
@@ -293,6 +341,15 @@ checkout.post('/', async (c) => {
     console.error('checkout_tenant_failed');
     await liberarLock();
     return c.json({ error: 'internal_error' }, 500);
+  }
+
+  // O grupo tambem precisa ficar gravado no assento de ORIGEM: sem isso a
+  // lista do painel enxergaria so os assentos novos. Condicional (is.null),
+  // entao nao mexe em grupo que ja existe.
+  if (assento) {
+    await garantirGrupo(c.env, assento.tenantId, assento.groupId).catch(() => {
+      console.error('checkout_seat_group_failed');
+    });
   }
 
   // CARTAO (F2.25): checkout hospedado do Asaas. O cartao e digitado LA; aqui

@@ -133,6 +133,138 @@ export async function createPortalLink(
   return portalLink(env, token);
 }
 
+// ---------------------------------------------------------------------------
+// Assentos adicionais (F2.29). 1 assento = 1 tenant, com assinatura, conta e
+// chave proprias: nada muda na resolucao do account_id. O que existe e um
+// GRUPO ligando os tenants do mesmo cliente, formado SO por acao autenticada
+// do painel (nunca por e-mail igual; ver migration 0011).
+// ---------------------------------------------------------------------------
+
+// Identificador do grupo: o uuid do tenant que o abriu. Sem grupo, o proprio
+// tenant e o grupo (formado de fato quando o segundo assento nasce).
+export function groupIdOf(tenant: { id: string; group_id?: string | null }): string {
+  return tenant.group_id ?? tenant.id;
+}
+
+// Referencia publica de um assento. O painel precisa nomear o irmao para o
+// qual quer trocar, e nenhuma resposta do painel devolve tenant_id (mesma
+// regra do account_id). Hash truncado do uuid: estavel entre chamadas e
+// inutil para quem nao ja conhece o uuid de origem.
+export async function seatRef(tenantId: string): Promise<string> {
+  return (await hashApiKey(`seat:${tenantId}`)).slice(0, 24);
+}
+
+export interface SeatRow {
+  id: string;
+  name: string;
+  group_id: string | null;
+  created_at: string;
+}
+
+// Tenants do grupo, mais antigo primeiro (a ordem vira "Conta 1, 2, 3" no
+// painel). Inclui o proprio, que pode ainda nao ter group_id gravado.
+export async function tenantsDoGrupo(env: Env, tenantId: string): Promise<SeatRow[]> {
+  const proprios = await supabaseSelect<SeatRow>(env, 'tenants', {
+    id: `eq.${tenantId}`,
+    status: 'eq.active',
+    select: 'id,name,group_id,created_at',
+    limit: '1',
+  });
+  const proprio = proprios[0];
+  if (!proprio) return [];
+  const grupo = groupIdOf(proprio);
+  const irmaos = await supabaseSelect<SeatRow>(env, 'tenants', {
+    group_id: `eq.${grupo}`,
+    status: 'eq.active',
+    select: 'id,name,group_id,created_at',
+    order: 'created_at.asc',
+  });
+  const todos = irmaos.some((t) => t.id === proprio.id) ? irmaos : [proprio, ...irmaos];
+  return todos.sort((a, b) => a.created_at.localeCompare(b.created_at));
+}
+
+// Token de uso unico que autoriza o checkout a criar um assento DENTRO do
+// grupo de quem esta logado. So o hash no banco, como todos os outros.
+export async function createSeatToken(
+  env: Env,
+  tenantId: string,
+  ttlMs: number,
+): Promise<{ token: string; expiresAt: string }> {
+  const token = `lk_seat_${randomHex32()}`;
+  const expiresAt = new Date(Date.now() + ttlMs).toISOString();
+  await supabaseInsert(env, 'portal_tokens', {
+    tenant_id: tenantId,
+    token_hash: await hashApiKey(token),
+    kind: 'seat',
+    status: 'active',
+    expires_at: expiresAt,
+  });
+  return { token, expiresAt };
+}
+
+// Le o token de assento SEM consumir: o checkout precisa do grupo antes de
+// decidir o lock, e um 409 de "ja tem um checkout aberto" nao pode queimar o
+// token de quem nem chegou a comprar.
+export async function lerSeatToken(
+  env: Env,
+  seatToken: string,
+): Promise<{ tenantId: string; groupId: string } | null> {
+  const tokenHash = await hashApiKey(seatToken);
+  const rows = await supabaseSelect<PortalTokenFullRow>(env, 'portal_tokens', {
+    token_hash: `eq.${tokenHash}`,
+    kind: 'eq.seat',
+    status: 'eq.active',
+    select: 'tenant_id,kind,status,expires_at',
+    limit: '1',
+  });
+  const row = rows[0];
+  if (!row || Date.parse(row.expires_at) <= Date.now()) return null;
+
+  const tenants = await supabaseSelect<SeatRow>(env, 'tenants', {
+    id: `eq.${row.tenant_id}`,
+    status: 'eq.active',
+    select: 'id,name,group_id,created_at',
+    limit: '1',
+  });
+  const tenant = tenants[0];
+  if (!tenant) return null;
+  return { tenantId: row.tenant_id, groupId: groupIdOf(tenant) };
+}
+
+// Consome o token (active -> used, condicional: replay e corrida morrem aqui).
+// Chamado imediatamente antes de criar o tenant do assento novo: um token
+// nunca paga duas vendas, e a validacao acima ja garantiu o grupo.
+export async function consumirSeatToken(env: Env, seatToken: string): Promise<boolean> {
+  const usados = await supabaseUpdate<PortalTokenRow>(
+    env,
+    'portal_tokens',
+    {
+      token_hash: `eq.${await hashApiKey(seatToken)}`,
+      kind: 'eq.seat',
+      status: 'eq.active',
+      expires_at: `gt.${new Date().toISOString()}`,
+    },
+    { status: 'used' },
+  );
+  return usados.length === 1;
+}
+
+// Abre o grupo no tenant de origem: o primeiro assento tambem precisa carregar
+// o group_id, senao a lista so enxergaria os assentos novos. Condicional
+// (is.null) para nao sobrescrever grupo ja existente.
+export async function garantirGrupo(
+  env: Env,
+  tenantId: string,
+  groupId: string,
+): Promise<void> {
+  await supabaseUpdate(
+    env,
+    'tenants',
+    { id: `eq.${tenantId}`, group_id: 'is.null' },
+    { group_id: groupId },
+  );
+}
+
 // Troca um link (uso unico) por uma sessao. O consumo e um UPDATE condicional
 // (active -> used), entao replay e corrida morrem aqui, igual aos connect_tokens.
 export async function exchangeLinkToken(
@@ -319,7 +451,40 @@ export async function createConnectLink(
     return null;
   }
   const data = (await res.json()) as { url?: string };
-  return typeof data.url === 'string' ? { url: data.url, expiresAt } : null;
+  return typeof data.url === 'string'
+    ? { url: aplicarDominioProprio(data.url, env.UNIPILE_AUTH_HOST), expiresAt }
+    : null;
+}
+
+// Dominio proprio da tela de conexao (F2.30). A origem hospeda o wizard num
+// dominio dela; com um CNAME nosso apontando para la (e o certificado que eles
+// emitem), a MESMA tela responde no nosso dominio. Aqui so trocamos o host do
+// link, preservando caminho, query e fragmento (e no caminho que esta o token
+// do wizard).
+//
+// Falha ABERTA de proposito: host mal configurado mantem o link original, que
+// funciona. Derrubar a conexao de quem ja pagou para nao mostrar uma marca
+// seria o erro maior; o sinal interno avisa o operador.
+export function aplicarDominioProprio(url: string, host: string | undefined): string {
+  const alvo = (host ?? '').trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+  if (!alvo) {
+    return url;
+  }
+  try {
+    const original = new URL(url);
+    const trocada = new URL(`https://${alvo}`);
+    // So host: um valor com caminho, usuario ou porta estranha nao entra.
+    if (trocada.host !== alvo || trocada.pathname !== '/') {
+      console.error('connect_auth_host_invalido');
+      return url;
+    }
+    original.protocol = 'https:';
+    original.host = alvo;
+    return original.toString();
+  } catch {
+    console.error('connect_auth_host_invalido');
+    return url;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -425,8 +590,23 @@ export async function enviarLinkDeAcesso(env: Env, email: string): Promise<void>
     { p_email: email },
   );
 
+  // Um link por GRUPO, nao por tenant (F2.29): quem tem dois assentos entra
+  // uma vez e alterna entre as contas dentro do painel. Sem isso o e-mail
+  // traria um link por assento, todos equivalentes.
+  const grupos =
+    tenants.length > 0
+      ? await supabaseSelect<SeatRow>(env, 'tenants', {
+          id: `in.(${tenants.map((t) => t.id).join(',')})`,
+          select: 'id,name,group_id,created_at',
+        })
+      : [];
+  const grupoDe = new Map(grupos.map((t) => [t.id, groupIdOf(t)]));
+
   const links: string[] = [];
+  const jaEnviados = new Set<string>();
   for (const tenant of tenants) {
+    const grupo = grupoDe.get(tenant.id) ?? tenant.id;
+    if (jaEnviados.has(grupo)) continue;
     // So quem ja pagou ao menos uma vez (ativo ou em atraso) recebe acesso.
     const subs = await supabaseSelect<BillingRow>(env, 'billing_subscriptions', {
       tenant_id: `eq.${tenant.id}`,
@@ -436,7 +616,10 @@ export async function enviarLinkDeAcesso(env: Env, email: string): Promise<void>
     });
     if (!subs[0]) continue;
     const link = await createPortalLink(env, tenant.id, LOGIN_LINK_TTL_MS);
-    if (link) links.push(link);
+    if (link) {
+      links.push(link);
+      jaEnviados.add(grupo);
+    }
   }
   if (links.length === 0) {
     return;

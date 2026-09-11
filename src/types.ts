@@ -32,7 +32,7 @@ export interface Env {
   // https://api-sandbox.asaas.com/v3 em dev, senao `npm run dev` cria cobranca
   // REAL (achado I6 do review do F2.14).
   ASAAS_BASE_URL?: string;
-  // Preco mensal por seat, em BRL (default 57).
+  // Preco mensal por seat, em BRL (default 67).
   PLAN_PRICE_BRL?: string;
   // Chave da API administrativa (operador). Sem ela, /admin nao existe (404).
   ADMIN_API_KEY?: string;
@@ -46,6 +46,13 @@ export interface Env {
   // Painel do cliente (F2.20). URL https da pagina do painel na landing: o
   // link dos e-mails e o redirect do wizard de conexao apontam para ela.
   PORTAL_URL?: string;
+  // Dominio proprio da tela de conexao (F2.30). So o HOST, sem esquema nem
+  // barra (ex.: auth.suamarca.com.br). Com ele, o link do wizard sai no NOSSO
+  // dominio e o cliente nunca ve a origem. Exige o CNAME para
+  // account.unipile.com e o certificado emitido pela Unipile (ver
+  // ACOES-HUMANAS.md); sem isso configurado, o link continua saindo no
+  // dominio da origem, que funciona igual.
+  UNIPILE_AUTH_HOST?: string;
   // E-mail transacional (Resend). Opcionais: sem os dois nada e enviado e o
   // onboarding segue pelo link que o checkout ja mostra na tela.
   RESEND_API_KEY?: string;

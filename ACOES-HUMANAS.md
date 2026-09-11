@@ -1,10 +1,10 @@
 # Acoes humanas (o que SO uma pessoa pode fazer para o projeto avancar)
 
-Todo o codigo esta pronto, testado (223 testes) e revisado. Este arquivo lista
+Todo o codigo esta pronto, testado (243 testes) e revisado. Este arquivo lista
 APENAS o que precisa de mao humana. Os comandos de deploy estao em
 [docs/go-live.md](docs/go-live.md) (secoes H e I).
 
-Atualizado em 2026-09-10.
+Atualizado em 2026-09-11.
 
 Onde fica cada coisa:
 - Landing e painel: Vercel, https://landing-api-linkedin.vercel.app (deploy a
@@ -16,6 +16,22 @@ Onde fica cada coisa:
 
 ---
 
+## 0. Subir o preco novo e os assentos (F2.29)
+
+Codigo pronto; falta so aplicar:
+
+1. **Migration 0011** no SQL Editor do Supabase:
+   `supabase/migrations/0011_assentos.sql` (agrupamento de assentos, rotulo da
+   conta e o novo tipo de token). Idempotente.
+2. **Deploy do Worker** (`npm run deploy`) e push da landing (o preco novo,
+   R$ 67, e o default do codigo).
+3. **Conferir se existe a var `PLAN_PRICE_BRL`** no Worker
+   (`npx wrangler secret list`). Se existir valendo 57, ela GANHA do codigo:
+   suba 67 no lugar ou apague. Sem a var, vale o default novo.
+4. Ninguem pagava ainda quando o preco mudou, entao nao ha cliente no preco
+   antigo. Para o futuro: autorizacao de Pix Automatico ja assinada vale pelo
+   valor autorizado; subir preco de quem ja paga exige nova autorizacao.
+
 ## 1. Provar com dinheiro de verdade
 
 - **Antes da compra no cartao: cadastrar o site na conta Asaas.** No painel
@@ -23,11 +39,17 @@ Onde fica cada coisa:
   `https://landing-api-linkedin.vercel.app` (hoje o campo esta vazio). O
   checkout de cartao devolve o cliente para esse dominio depois do
   pagamento. E dado cadastral da empresa, por isso fica com voces.
-- **Uma compra no Pix e uma no cartao** (R$ 57 cada), com CPF e LinkedIn da
+- **Uma compra no Pix e uma no cartao** (R$ 67 cada), com CPF e LinkedIn da
   equipe: checkout -> pagamento -> painel -> conectar LinkedIn -> gerar chave.
   E a unica prova ponta a ponta do fluxo inteiro. No cartao, conferir no mes
   seguinte que a renovacao continua ativando a conta. Depois, cancelar pelo
   app do banco (Pix) ou pedindo o cancelamento (cartao).
+- **Um assento adicional** (F2.29), com a mesma conta: no painel, "Adicionar
+  outra conta" -> mesmo checkout -> pagar -> conferir que a conta nova aparece
+  na lista, que a PRIMEIRA continua ativa (a compra nova nao pode encerrar a
+  anterior) e que da para alternar entre as duas. Se as duas forem Pix com o
+  mesmo CPF, conferir tambem que o pagamento ativou o assento certo (o log
+  marca `billing_ambiguous_customer` quando nao da para decidir).
 
 ## 2. Empresa e juridico (antes de mandar trafego pago)
 
@@ -40,14 +62,51 @@ Onde fica cada coisa:
 - **Nome definitivo** do produto (o atual e provisorio). Ao trocar, seguir a
   lista de arquivos no README da landing.
 
-## 3. Victor
+## 3. Tirar a marca da origem da tela de conexao (F2.30)
+
+O codigo ja esta pronto: com a var `UNIPILE_AUTH_HOST` preenchida, o link que
+o painel abre sai no NOSSO dominio. Sem ela, sai no dominio da origem (e
+funciona igual). O que falta e so o que depende de voces:
+
+1. **Registrar o dominio proprio** (ainda nao existe; hoje a landing e
+   `landing-api-linkedin.vercel.app`, e em dominio da Vercel nao da para criar
+   o CNAME abaixo). Este e o unico bloqueio real.
+2. **Criar o CNAME** no painel do registrador:
+   - Nome: `auth` (vira `auth.seudominio.com.br`)
+   - Tipo: `CNAME`
+   - Valor/alvo: `account.unipile.com.` (com o ponto no fim)
+   - A propagacao leva ate 24h. Confira em whatsmydns.net antes do passo 3.
+3. **Abrir chamado na Unipile** (chat do dashboard ou suporte) pedindo o
+   certificado do dominio proprio da hosted auth, passando a URL completa
+   (`https://auth.seudominio.com.br`). Eles emitem o SSL e finalizam do lado
+   deles. Exige assinatura ativa, que ja temos.
+4. **Ligar no Worker**, com o host puro, sem `https://` e sem barra:
+   ```bash
+   npx wrangler secret put UNIPILE_AUTH_HOST
+   # cole: auth.seudominio.com.br
+   npm run deploy
+   ```
+5. **Conferir**: abrir o painel, clicar em conectar e olhar a barra de
+   endereco. Tem que aparecer `auth.seudominio.com.br`. Se algo estiver errado
+   na var, o link volta a sair no dominio da origem (falha aberta, de
+   proposito: ninguem fica sem conectar) e o log marca
+   `connect_auth_host_invalido`.
+
+Observacoes:
+- O tela em si continua sendo a da origem, so que servida no nosso dominio. A
+  Unipile desaconselha embutir em iframe (quebra o captcha do LinkedIn), entao
+  o CNAME e o caminho suportado.
+- Enquanto o dominio nao existir, o cliente ve o dominio da origem nessa tela.
+  O resto do produto (landing, painel, API, docs) nunca cita a origem.
+
+## 4. Victor
 
 - Revisar e fazer o merge do PR
   [vzbaggio/linkedapi-proxy#1](https://github.com/vzbaggio/linkedapi-proxy/pull/1).
 - Reconectar o LinkedIn dele (sessao caida na conta-mestra).
 - O backend continua na conta Cloudflare dele (decidido em 2026-09-10).
 
-## 4. Opcionais
+## 5. Opcionais
 
 - **Resend** (e-mail transacional): boas-vindas com o link do painel e o
   "entrar pelo e-mail". Criar conta, verificar um dominio e rodar
@@ -55,8 +114,8 @@ Onde fica cada coisa:
   Sem isso o acesso fica salvo no navegador de quem pagou; plano B do
   operador: `npm run portal:link -- <tenant_id>`.
 - **Dominio proprio** quando houver nome definitivo: apontar na Vercel,
-  adicionar a origem no CORS (`src/index.ts`) e trocar `PORTAL_URL` no
-  `wrangler.jsonc`.
+  adicionar a origem no CORS (`src/index.ts`), trocar `PORTAL_URL` no
+  `wrangler.jsonc` e fazer o passo 3 acima (`auth.` da tela de conexao).
 - Definir tiers de plano (hoje `basic` + override manual de limites).
 
 ---

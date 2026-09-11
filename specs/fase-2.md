@@ -97,7 +97,7 @@ do /hooks/connect):
 ### 6. Billing Asaas (migration 0007 + `scripts/billing.ts`)
 
 `npm run billing:subscribe -- <tenant_id> "<nome>" <cpf_cnpj> <email>` cria
-cliente + assinatura Pix mensal (valor `PLAN_PRICE_BRL`, default 57; primeiro
+cliente + assinatura Pix mensal (valor `PLAN_PRICE_BRL`, default 67; primeiro
 vencimento em 3 dias) e grava o vinculo. `billing:status` lista. O Worker so
 processa o webhook (`/hooks/billing`); nenhuma credencial do Asaas vive nele.
 

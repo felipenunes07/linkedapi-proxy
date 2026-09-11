@@ -2,7 +2,7 @@
 //
 //   npm run billing:subscribe -- <tenant_id> "<nome>" <cpf_cnpj> <email>
 //     cria o cliente + assinatura Pix mensal no Asaas e grava o vinculo em
-//     billing_subscriptions. O valor vem de PLAN_PRICE_BRL (default 57).
+//     billing_subscriptions. O valor vem de PLAN_PRICE_BRL (default 67).
 //   npm run billing:status
 //     lista as assinaturas e seus status.
 //
@@ -15,7 +15,7 @@
 // Asaas; ver docs/pendencias.md.
 import { loadEnv, loadEnvOptional, fail } from './env.ts';
 
-const DEFAULT_PRICE_BRL = 57;
+const DEFAULT_PRICE_BRL = 67;
 
 function asaasBase(): string {
   return (loadEnvOptional('ASAAS_BASE_URL') ?? 'https://api.asaas.com/v3').replace(/\/+$/, '');

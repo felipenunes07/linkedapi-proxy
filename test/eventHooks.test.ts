@@ -868,3 +868,108 @@ describe('POST /hooks/billing', () => {
     expect(db.billing[0]?.status).toBe('active');
   });
 });
+
+// F2.29: com dois assentos, o MESMO cliente do Asaas pode ancorar duas
+// assinaturas nossas. Ativar o assento errado deixaria quem pagou sem conta e
+// quem nao pagou com conta, entao o cliente so decide quando nao ha duvida.
+describe('POST /hooks/billing, dois assentos do mesmo cliente (F2.29)', () => {
+  beforeEach(() => {
+    db.tenants.tS1 = { webhook_url: null, webhook_secret: null };
+    db.tenants.tS2 = { webhook_url: null, webhook_secret: null };
+    db.accounts.push(
+      { id: 'ca-s1', tenant_id: 'tS1', unipile_account_id: 'ua-s1', status: 'active' },
+      { id: 'ca-s2', tenant_id: 'tS2', unipile_account_id: 'ua-s2', status: 'active' },
+    );
+  });
+
+  it('assento 1 ja pago, assento 2 esperando: a cobranca PIX ativa o que espera', async () => {
+    db.billing.push(
+      {
+        tenant_id: 'tS1',
+        asaas_subscription_id: 'sub_S1',
+        asaas_customer_id: 'cus_mesmo',
+        payment_method: 'pix_automatic',
+        status: 'active',
+      },
+      {
+        tenant_id: 'tS2',
+        asaas_subscription_id: null,
+        asaas_customer_id: 'cus_mesmo',
+        payment_method: 'pix_automatic',
+        status: 'pending',
+      },
+    );
+
+    const res = await post(
+      '/hooks/billing',
+      {
+        event: 'PAYMENT_CONFIRMED',
+        payment: { id: 'pay_2', billingType: 'PIX', customer: 'cus_mesmo' },
+      },
+      { 'asaas-access-token': ASAAS_TOKEN },
+    );
+    expect(res.status).toBe(200);
+    expect(db.billing.find((b) => b.tenant_id === 'tS2')?.status).toBe('active');
+    expect(db.billing.find((b) => b.tenant_id === 'tS1')?.status).toBe('active');
+  });
+
+  it('dois assentos esperando o primeiro pagamento: nao chuta, ignora e sinaliza', async () => {
+    db.billing.push(
+      {
+        tenant_id: 'tS1',
+        asaas_subscription_id: null,
+        asaas_customer_id: 'cus_mesmo',
+        payment_method: 'pix_automatic',
+        status: 'pending',
+      },
+      {
+        tenant_id: 'tS2',
+        asaas_subscription_id: null,
+        asaas_customer_id: 'cus_mesmo',
+        payment_method: 'pix_automatic',
+        status: 'pending',
+      },
+    );
+
+    const res = await post(
+      '/hooks/billing',
+      {
+        event: 'PAYMENT_CONFIRMED',
+        payment: { id: 'pay_3', billingType: 'PIX', customer: 'cus_mesmo' },
+      },
+      { 'asaas-access-token': ASAAS_TOKEN },
+    );
+    expect(await res.json()).toEqual({ ok: true, ignored: true });
+    expect(db.billing.filter((b) => b.status === 'pending')).toHaveLength(2);
+  });
+
+  it('assinatura conhecida continua decidindo antes do cliente (renovacao do assento certo)', async () => {
+    db.billing.push(
+      {
+        tenant_id: 'tS1',
+        asaas_subscription_id: 'sub_S1',
+        asaas_customer_id: 'cus_mesmo',
+        payment_method: 'pix_automatic',
+        status: 'overdue',
+      },
+      {
+        tenant_id: 'tS2',
+        asaas_subscription_id: 'sub_S2',
+        asaas_customer_id: 'cus_mesmo',
+        payment_method: 'pix_automatic',
+        status: 'active',
+      },
+    );
+
+    const res = await post(
+      '/hooks/billing',
+      {
+        event: 'PAYMENT_CONFIRMED',
+        payment: { id: 'pay_4', billingType: 'PIX', customer: 'cus_mesmo', subscription: 'sub_S1' },
+      },
+      { 'asaas-access-token': ASAAS_TOKEN },
+    );
+    expect(res.status).toBe(200);
+    expect(db.billing.find((b) => b.tenant_id === 'tS1')?.status).toBe('active');
+  });
+});
