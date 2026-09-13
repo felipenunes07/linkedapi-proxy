@@ -30,7 +30,7 @@
   "vars": {
     "ENVIRONMENT": "production",
     // Pagina do painel do cliente na landing (F2.20), hospedada na Vercel
-    // (F2.26). Trocar quando houver dominio proprio.
-    "PORTAL_URL": "https://landing-api-linkedin.vercel.app/painel"
+    // (F2.26), no dominio proprio desde 2026-09-13 (F2.33).
+    "PORTAL_URL": "https://app.playbooklab.com.br/painel"
   }
 }

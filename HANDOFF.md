@@ -15,7 +15,7 @@ era placeholder e segue só no nome dos repositórios). Contato publicado:
 victor@playbooklab.com.br.
 
 - Landing e painel do cliente: **Vercel**,
-  https://landing-api-linkedin.vercel.app (deploy a cada push no `master` do
+  https://app.playbooklab.com.br (deploy a cada push no `master` do
   repo da landing).
 - API: **Cloudflare Workers** na conta do Victor,
   https://linkedapi-proxy.victor-58a.workers.dev (`npm run deploy`).

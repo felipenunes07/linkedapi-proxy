@@ -30,7 +30,7 @@ export const WELCOME_LINK_TTL_MS = 72 * 60 * 60 * 1000;
 export const LOGIN_LINK_TTL_MS = 30 * 60 * 1000;
 // Mesmo TTL do fluxo do operador (Marco 4): o link e para ser usado na hora.
 const CONNECT_LINK_TTL_MS = 2 * 60 * 60 * 1000;
-const DEFAULT_PORTAL_URL = 'https://landing-api-linkedin.vercel.app/painel';
+const DEFAULT_PORTAL_URL = 'https://app.playbooklab.com.br/painel';
 
 // D7: sem Recruiter/Sales Navigator/caixas de organizacao.
 const DISABLED_FEATURES = [

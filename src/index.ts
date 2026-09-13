@@ -66,12 +66,13 @@ app.route('/admin', admin);
 // (nunca '*': as rotas escrevem no banco, criam cobranca e entregam
 // credencial). Sem ASAAS_API_KEY o checkout responde 404 (ver routes/checkout).
 const LANDING_ORIGINS = new Set([
-  // Landing oficial na Vercel (F2.26). O Pages antigo so redireciona para ca,
-  // mas segue na lista durante a transicao (abas ja abertas no dominio velho).
+  // Dominio proprio (F2.33). E o endereco que o cliente ve: o da Vercel fica
+  // durante a transicao, porque link de e-mail e aba aberta ainda apontam
+  // para la. NAO listar dominio que nao e nosso: quem o registrasse chamaria
+  // o checkout com CORS liberado.
+  'https://app.playbooklab.com.br',
   'https://landing-api-linkedin.vercel.app',
   'https://linkedapi-site.pages.dev',
-  // Dominio proprio entra aqui quando existir. NAO listar dominio que nao e
-  // nosso: quem o registrasse chamaria o checkout com CORS liberado.
 ]);
 
 const landingCors: MiddlewareHandler<{ Bindings: Env; Variables: Variables }> = async (

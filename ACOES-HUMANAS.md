@@ -7,7 +7,7 @@ APENAS o que precisa de mao humana. Os comandos de deploy estao em
 Atualizado em 2026-09-13.
 
 Onde fica cada coisa:
-- Landing e painel: Vercel, https://landing-api-linkedin.vercel.app (deploy a
+- Landing e painel: Vercel, https://app.playbooklab.com.br (deploy a
   cada push no `master` do repo da landing).
 - Backend: Cloudflare Workers na conta do Victor,
   https://linkedapi-proxy.victor-58a.workers.dev (`npm run deploy`).
@@ -46,11 +46,9 @@ npm run deploy
 
 ## 1. Provar com dinheiro de verdade
 
-- **Antes da compra no cartao: cadastrar o site na conta Asaas.** No painel
-  do Asaas, Minha Conta > Informacoes > Site:
-  `https://landing-api-linkedin.vercel.app` (hoje o campo esta vazio). O
-  checkout de cartao devolve o cliente para esse dominio depois do
-  pagamento. E dado cadastral da empresa, por isso fica com voces.
+- ~~Cadastrar o site na conta Asaas~~ FEITO em 2026-09-13
+  (`https://app.playbooklab.com.br`, o mesmo dominio para onde o checkout de
+  cartao devolve o cliente).
 - **Uma compra no Pix e uma no cartao** (R$ 67 cada), com CPF e LinkedIn da
   equipe: checkout -> pagamento -> painel -> conectar LinkedIn -> gerar chave.
   E a unica prova ponta a ponta do fluxo inteiro. No cartao, conferir no mes

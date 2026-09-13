@@ -16,7 +16,7 @@ const SCALAR_URL =
 const SCALAR_SRI =
   'sha384-NAMzfHXRsxRYhcKmRnZGVLvlBeXTWtpYd0jWgeZ7fk89X95GIJBK1H4bUwkP4IZJ';
 
-const PAINEL_PADRAO = 'https://landing-api-linkedin.vercel.app/painel';
+const PAINEL_PADRAO = 'https://app.playbooklab.com.br/painel';
 const SUPORTE = 'victor@playbooklab.com.br';
 
 // Altura da nossa barra (marca + abas). O Scalar tem suporte NATIVO a header
