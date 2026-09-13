@@ -46,9 +46,12 @@ npm run deploy
 
 ## 1. Provar com dinheiro de verdade
 
-- ~~Cadastrar o site na conta Asaas~~ FEITO em 2026-09-13
-  (`https://app.playbooklab.com.br`, o mesmo dominio para onde o checkout de
-  cartao devolve o cliente).
+- **Cadastrar o site na conta Asaas.** Minha Conta > Informacoes > Site:
+  `https://app.playbooklab.com.br`, e clicar em Salvar no fim do formulario.
+  Conferido pela API deles em 2026-09-13: o campo ainda volta vazio
+  (`commercialInfo.site = null`), entao a edicao nao chegou a salvar. E dado
+  cadastral; NAO e o que decide para onde o cliente volta depois de pagar
+  (isso vem do nosso backend, que ja manda para o dominio proprio).
 - **Uma compra no Pix e uma no cartao** (R$ 67 cada), com CPF e LinkedIn da
   equipe: checkout -> pagamento -> painel -> conectar LinkedIn -> gerar chave.
   E a unica prova ponta a ponta do fluxo inteiro. No cartao, conferir no mes
@@ -60,6 +63,25 @@ npm run deploy
   anterior) e que da para alternar entre as duas. Se as duas forem Pix com o
   mesmo CPF, conferir tambem que o pagamento ativou o assento certo (o log
   marca `billing_ambiguous_customer` quando nao da para decidir).
+
+## 1b. Dominio proprio da API (decisao de conta, nao de codigo)
+
+O site e o painel ja atendem em `app.playbooklab.com.br`. A API e a
+documentacao continuam em `linkedapi-proxy.victor-58a.workers.dev`, que e o
+endereco que o cliente ve no `curl` e no botao Documentacao.
+
+Tentado em 2026-09-13 e BLOQUEADO: o Worker vive na conta Cloudflare do Victor
+(`58af046e...`) e a zona `playbooklab.com.br` esta em OUTRA conta Cloudflare.
+O deploy recusa com `Can't infer zone from route`. Para ter
+`api.playbooklab.com.br`, alguem precisa decidir uma destas:
+
+1. mover a zona `playbooklab.com.br` para a conta do Victor (mexe no DNS do
+   dominio inteiro da empresa: site, e-mail, tudo);
+2. mover o Worker para a conta que tem a zona (contraria a decisao de
+   2026-09-10 de manter o backend na conta do Victor);
+3. deixar como esta: a API responde num endereco tecnico, e so.
+
+Nao e bloqueio de venda: nada quebra hoje. E questao de aparencia na doc.
 
 ## 2. Empresa e juridico (antes de mandar trafego pago)
 
