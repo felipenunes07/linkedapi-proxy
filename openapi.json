@@ -7,7 +7,7 @@
   },
   "servers": [
     {
-      "url": "https://linkedapi-proxy.victor-58a.workers.dev",
+      "url": "https://api.playbooklab.com.br",
       "description": "Producao (workers.dev)"
     },
     {

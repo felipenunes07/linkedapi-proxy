@@ -4,8 +4,9 @@
   // Em dev: `.dev.vars`. Em producao: `npx wrangler secret put <NOME>`.
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "linkedapi-proxy",
-  // Conta do Victor (o token OAuth do Felipe acessa 2 contas; deploy vai nesta)
-  "account_id": "58af046efff1765ebba08637bebcb580",
+  // Conta do Fernando (F2.34): e a que tem a zona playbooklab.com.br, e custom
+  // domain de Worker exige zona e Worker na MESMA conta.
+  "account_id": "31dab3c5b7eda847ef37a9f53e0aa893",
   "main": "src/index.ts",
   "compatibility_date": "2026-07-01",
   "compatibility_flags": ["nodejs_compat"],
@@ -18,13 +19,23 @@
   // crie o namespace e troque o id:
   //   npx wrangler kv namespace create RATE_LIMIT
   "kv_namespaces": [
-    { "binding": "RATE_LIMIT", "id": "6418f47785a5457da8da180234fa5086" }
+    { "binding": "RATE_LIMIT", "id": "b79c9339f2084b8fbc8e52003c691eec" }
   ],
 
+  // Dominio proprio da API (F2.34). E o endereco que o cliente ve na
+  // documentacao e copia no curl, e e para ele que os webhooks passam a
+  // apontar: nao depende mais de qual conta hospeda o Worker.
+  "routes": [{ "pattern": "api.playbooklab.com.br", "custom_domain": true }],
+
   // Faxina de checkouts abandonados (src/lib/limpeza.ts), de hora em hora.
-  "triggers": {
-    "crons": ["23 * * * *"]
-  },
+  // TEMPORARIO (F2.34): a conta nova ainda nao tem subdominio workers.dev, e o
+  // deploy do cron falha sem ele (`code: 10063`). Basta abrir Workers & Pages
+  // no painel da conta uma vez; depois disso, descomentar e publicar. Enquanto
+  // isso o Worker ANTIGO (conta do Victor) segue com o cron da faxina, que
+  // trabalha no mesmo banco.
+  // "triggers": {
+  //   "crons": ["23 * * * *"]
+  // },
 
   // Variaveis NAO secretas podem ir em "vars". Segredos, nunca.
   "vars": {

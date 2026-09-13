@@ -64,24 +64,31 @@ npm run deploy
   mesmo CPF, conferir tambem que o pagamento ativou o assento certo (o log
   marca `billing_ambiguous_customer` quando nao da para decidir).
 
-## 1b. Dominio proprio da API (decisao de conta, nao de codigo)
+## 1b. Dominio proprio da API: FEITO em 2026-09-13 (F2.34)
 
-O site e o painel ja atendem em `app.playbooklab.com.br`. A API e a
-documentacao continuam em `linkedapi-proxy.victor-58a.workers.dev`, que e o
-endereco que o cliente ve no `curl` e no botao Documentacao.
+A API e a documentacao atendem em `https://api.playbooklab.com.br`. O Worker
+mudou de conta Cloudflare (do Victor para a do Fernando, `31dab3c5...`), porque
+custom domain exige zona e Worker na MESMA conta e a zona
+`playbooklab.com.br` esta la. O que foi migrado: KV novo
+(`b79c9339...`), os 10 secrets, o dominio proprio e os webhooks.
 
-Tentado em 2026-09-13 e BLOQUEADO: o Worker vive na conta Cloudflare do Victor
-(`58af046e...`) e a zona `playbooklab.com.br` esta em OUTRA conta Cloudflare.
-O deploy recusa com `Can't infer zone from route`. Para ter
-`api.playbooklab.com.br`, alguem precisa decidir uma destas:
+**Falta um clique de quem tem o painel da conta do Fernando:** abrir
+**Workers & Pages** uma vez, o que cria o subdominio `workers.dev` da conta.
+Sem ele o deploy do CRON falha (`code: 10063`) e a faxina de checkouts
+abandonados nao roda no Worker novo. Depois de abrir, me avise: eu
+descomento o bloco `triggers` do `wrangler.jsonc` e publico.
 
-1. mover a zona `playbooklab.com.br` para a conta do Victor (mexe no DNS do
-   dominio inteiro da empresa: site, e-mail, tudo);
-2. mover o Worker para a conta que tem a zona (contraria a decisao de
-   2026-09-10 de manter o backend na conta do Victor);
-3. deixar como esta: a API responde num endereco tecnico, e so.
+Enquanto isso o Worker ANTIGO (conta do Victor) segue publicado e com o cron
+dele, trabalhando no mesmo banco: a faxina continua acontecendo. **Depois do
+cron no novo, apagar o antigo** (painel da conta do Victor, Workers & Pages,
+`linkedapi-proxy` > Settings > Delete), senao ficam dois Workers vivos
+respondendo no `workers.dev` antigo.
 
-Nao e bloqueio de venda: nada quebra hoje. E questao de aparencia na doc.
+Webhooks ja reapontados para o dominio novo e conferidos no ar:
+- Unipile `linkedapi-account-status` e `linkedapi-message-received` (os antigos
+  foram apagados; os outros 5 webhooks da conta, de outros projetos, nao foram
+  tocados);
+- Asaas `LinkedAPI billing` (`PUT /v3/webhooks`, 5 eventos, enabled).
 
 ## 2. Empresa e juridico (antes de mandar trafego pago)
 

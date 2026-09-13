@@ -18,7 +18,7 @@ victor@playbooklab.com.br.
   https://app.playbooklab.com.br (deploy a cada push no `master` do
   repo da landing).
 - API: **Cloudflare Workers** na conta do Victor,
-  https://linkedapi-proxy.victor-58a.workers.dev (`npm run deploy`).
+  https://api.playbooklab.com.br (`npm run deploy`).
 
 Stack: Cloudflare Workers + Hono (TypeScript), Supabase (Postgres + RLS), rate
 limit em Cloudflare KV, docs via Scalar a partir de OpenAPI.
@@ -85,7 +85,7 @@ Os 3 endpoints do proxy: `POST /v1/messages`, `POST /v1/invitations`,
   Dennis (as antigas, Victor CREDENTIALS e placeholder, foram para
   `disconnected`).
 - **Cloudflare: DEPLOYADO (2026-09-01).** Worker publicado na conta do Victor:
-  `https://linkedapi-proxy.victor-58a.workers.dev` (`/health` ok, `/docs` no ar,
+  `https://api.playbooklab.com.br` (`/health` ok, `/docs` no ar,
   KV RATE_LIMIT criado, 4 secrets subidos, `PUBLIC_BASE_URL` preenchido no
   `.dev.vars`, server do `openapi.json` atualizado). Login do wrangler feito com
   o OAuth do Felipe, que tem acesso à conta do Victor; `account_id` fixado no
