@@ -8,7 +8,12 @@ import { attemptKey, bumpAttempts } from '../lib/throttle';
 import { fireAndForget } from '../lib/async';
 import { emailValido } from '../lib/documento';
 import { emailConfigured } from '../lib/email';
-import { updateCustomerEmail } from '../lib/asaas';
+import {
+  updateCustomerEmail,
+  getSubscription,
+  cancelSubscription,
+  cancelPixAutomaticAuthorization,
+} from '../lib/asaas';
 import { isValidWebhookUrl } from './selfservice';
 import {
   resolvePortalToken,
@@ -62,6 +67,9 @@ const DEFAULT_SEAT_CAP = 10;
 const KEY_LOCK_TTL_SECONDS = 60;
 const MAX_WEBHOOK_CHANGES_PER_TENANT = 20;
 const MAX_SEAT_TOKENS_PER_TENANT = 10;
+const MAX_CANCEL_PER_TENANT = 10;
+// Mesmo default do checkout: o painel mostra o que a venda cobra.
+const DEFAULT_PRICE_BRL = 67;
 const MAX_SEATS_READS_PER_TENANT = 600;
 const MAX_SWITCH_PER_TENANT = 60;
 // O token de assento so precisa viver da decisao ate o checkout terminar.
@@ -623,6 +631,139 @@ portal.post('/switch', async (c) => {
   return c.json({
     ok: true,
     data: { token: sessao.token, expires_at: sessao.expiresAt },
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Assinatura pelo painel (F2.37). O cliente ve o que contratou e cancela
+// sozinho, sem escrever para ninguem. Cancelar NAO corta na hora: o acesso
+// vale ate o fim do periodo que ele ja pagou.
+// ---------------------------------------------------------------------------
+
+interface AssinaturaRow {
+  status: string;
+  payment_method: string | null;
+  asaas_subscription_id: string | null;
+  asaas_authorization_id: string | null;
+  access_until: string | null;
+  created_at: string;
+}
+
+const METODO_LEGIVEL: Record<string, string> = {
+  pix_automatic: 'Pix Automático',
+  pix: 'Pix',
+  card: 'Cartão de crédito',
+};
+
+function assinaturaDoTenant(env: Env, tenantId: string): Promise<AssinaturaRow[]> {
+  return supabaseSelect<AssinaturaRow>(env, 'billing_subscriptions', {
+    tenant_id: `eq.${tenantId}`,
+    select:
+      'status,payment_method,asaas_subscription_id,asaas_authorization_id,access_until,created_at',
+    limit: '1',
+  });
+}
+
+// O que a tela de assinatura mostra. Nenhum id do gateway sai daqui: so o que
+// o cliente precisa para decidir (estado, valor, forma de pagamento, quando
+// cai a proxima e ate quando o acesso vale se ele ja cancelou).
+portal.get('/subscription', async (c) => {
+  const s = await gate(c);
+  if (s instanceof Response) return s;
+
+  const linhas = await assinaturaDoTenant(c.env, s.tenantId);
+  const linha = linhas[0];
+  if (!linha) {
+    return c.json({
+      ok: true,
+      data: { status: 'none', price: null, method: null, next_charge: null, access_until: null },
+    });
+  }
+
+  // A proxima cobranca vem do gateway, e so quando ja existe assinatura la
+  // (no Pix Automatico ela nasce depois da autorizacao). Falha de rede nao
+  // derruba a tela: o campo volta nulo.
+  let proxima: string | null = null;
+  if (linha.status === 'active' && linha.asaas_subscription_id) {
+    const assinatura = await getSubscription(c.env, linha.asaas_subscription_id).catch(
+      () => null,
+    );
+    proxima = assinatura?.nextDueDate ?? null;
+  }
+
+  const preco = Number(c.env.PLAN_PRICE_BRL ?? DEFAULT_PRICE_BRL);
+  return c.json({
+    ok: true,
+    data: {
+      status: linha.status,
+      price: Number.isFinite(preco) ? preco : null,
+      method: linha.payment_method ? (METODO_LEGIVEL[linha.payment_method] ?? null) : null,
+      next_charge: proxima,
+      access_until: linha.access_until,
+      can_cancel: linha.status === 'active' || linha.status === 'overdue',
+    },
+  });
+});
+
+// Cancelar a renovacao. Ordem importa: primeiro o gateway para de cobrar,
+// depois marcamos. Se o gateway falhar, NAO marcamos nada: pior que nao
+// cancelar e o cliente achar que cancelou e continuar sendo cobrado.
+portal.post('/cancel', async (c) => {
+  const s = await gate(c);
+  if (s instanceof Response) return s;
+
+  const tentativas = await bumpAttempts(
+    c.env.RATE_LIMIT,
+    attemptKey('portal-cancel', s.tenantId),
+  );
+  if (tentativas > MAX_CANCEL_PER_TENANT) {
+    return c.json({ error: 'rate_limited' }, 429);
+  }
+
+  const linhas = await assinaturaDoTenant(c.env, s.tenantId);
+  const linha = linhas[0];
+  if (!linha) {
+    return c.json({ error: 'subscription_not_found' }, 404);
+  }
+  if (linha.status === 'canceled') {
+    return c.json({ ok: true, data: { status: 'canceled', access_until: linha.access_until } });
+  }
+
+  // Desliga tudo o que pode cobrar de novo: a assinatura e, no Pix
+  // Automatico, a autorizacao que o banco guarda.
+  let desligou = false;
+  if (linha.asaas_subscription_id) {
+    desligou = await cancelSubscription(c.env, linha.asaas_subscription_id).catch(() => false);
+  }
+  if (linha.asaas_authorization_id) {
+    const fim = await cancelPixAutomaticAuthorization(
+      c.env,
+      linha.asaas_authorization_id,
+    ).catch(() => false);
+    desligou = desligou || fim;
+  }
+  if (!linha.asaas_subscription_id && !linha.asaas_authorization_id) {
+    // Vinculo sem nada do lado do gateway (pagamento nunca chegou): cancelar
+    // aqui basta, nao ha cobranca futura para desligar.
+    desligou = true;
+  }
+  if (!desligou) {
+    console.error(`portal_cancel_gateway_failed: ${s.tenantId}`);
+    return c.json({ error: 'billing_unavailable' }, 502);
+  }
+
+  await supabaseUpdate(
+    c.env,
+    'billing_subscriptions',
+    { tenant_id: `eq.${s.tenantId}` },
+    { status: 'canceled', updated_at: new Date().toISOString() },
+  );
+
+  // A conta NAO pausa agora: o periodo pago vale ate o fim (a faxina pausa
+  // quando access_until vencer).
+  return c.json({
+    ok: true,
+    data: { status: 'canceled', access_until: linha.access_until },
   });
 });
 

@@ -188,3 +188,49 @@ export async function limparCheckoutsAbandonados(
   }
   return { removidos, mantidos };
 }
+
+// ---------------------------------------------------------------------------
+// Fim do periodo pago de quem cancelou (F2.37).
+//
+// Cancelar nao corta o acesso na hora: o cliente usa ate o fim do mes que ja
+// pagou (`access_until`). Passou disso, a conta PAUSA, nunca e apagada, mesma
+// regra da inadimplencia: se ele voltar a assinar, a conta volta com ele.
+//
+// Roda no mesmo cron de hora em hora. Sem `access_until` (nunca pagou) nao ha
+// periodo a respeitar, e esse caso ja e tratado pela faxina de checkouts.
+// ---------------------------------------------------------------------------
+
+interface CanceladoRow {
+  tenant_id: string;
+}
+
+export async function pausarAcessosVencidos(env: Env): Promise<number> {
+  const vencidos = await supabaseSelect<CanceladoRow>(env, 'billing_subscriptions', {
+    status: 'eq.canceled',
+    access_until: `lt.${new Date().toISOString()}`,
+    select: 'tenant_id',
+    limit: '20',
+  });
+
+  let pausados = 0;
+  for (const linha of vencidos) {
+    try {
+      const contas = await supabaseUpdate<{ id: string }>(
+        env,
+        'connected_accounts',
+        { tenant_id: `eq.${linha.tenant_id}`, status: 'eq.active' },
+        { status: 'paused' },
+      );
+      if (contas.length > 0) {
+        pausados += contas.length;
+        // So o uuid do tenant (nosso), como no resto da faxina.
+        console.log(`acesso_encerrado: ${linha.tenant_id}`);
+      }
+    } catch (err) {
+      console.error(
+        `acesso_encerrado_erro: ${linha.tenant_id} ${err instanceof Error ? err.message : 'erro'}`,
+      );
+    }
+  }
+  return pausados;
+}

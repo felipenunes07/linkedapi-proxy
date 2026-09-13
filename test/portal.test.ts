@@ -106,12 +106,23 @@ vi.mock('../src/lib/email', () => ({
 
 vi.mock('../src/lib/asaas', () => ({
   updateCustomerEmail: vi.fn(async () => true),
+  getSubscription: vi.fn(async () => ({
+    nextDueDate: '2026-10-13',
+    billingType: 'PIX',
+    status: 'ACTIVE',
+  })),
+  cancelSubscription: vi.fn(async () => true),
+  cancelPixAutomaticAuthorization: vi.fn(async () => true),
 }));
 
 import app from '../src/index';
 import { createHostedAuthLink } from '../src/lib/unipile';
 import { sendEmail } from '../src/lib/email';
-import { updateCustomerEmail } from '../src/lib/asaas';
+import {
+  updateCustomerEmail,
+  cancelSubscription,
+  cancelPixAutomaticAuthorization,
+} from '../src/lib/asaas';
 
 const TOKEN_A = `lk_portal_${'a'.repeat(64)}`;
 const TOKEN_B = `lk_portal_${'b'.repeat(64)}`;
@@ -990,5 +1001,85 @@ describe('portal: sessoes com mais de um assento (F2.31)', () => {
     await req('/portal/logout', { method: 'POST', token: TOKEN_A, body: {} }, env);
     expect((await req('/portal/status', { token: TOKEN_A }, env)).status).toBe(401);
     expect((await req('/portal/status', { token: TOKEN_C }, env)).status).toBe(200);
+  });
+});
+
+// F2.37: a assinatura pelo painel. O que estes testes seguram: o cliente ve o
+// que contratou, cancela sozinho, e cancelar NAO corta o acesso que ele ja
+// pagou. Se o gateway nao confirmar o cancelamento, nada e marcado: pior que
+// nao cancelar e ele achar que cancelou e continuar sendo cobrado.
+describe('portal: assinatura e cancelamento (F2.37)', () => {
+  const FUTURO_PROXIMO = new Date(Date.now() + 20 * 24 * 60 * 60 * 1000).toISOString();
+
+  beforeEach(() => {
+    for (const b of db.billing_subscriptions!) {
+      if (b.tenant_id === 'tA') {
+        b.payment_method = 'pix_automatic';
+        b.asaas_subscription_id = 'sub_A';
+        b.asaas_authorization_id = 'auth_A';
+        b.access_until = FUTURO_PROXIMO;
+      }
+    }
+  });
+
+  it('mostra o que o cliente contratou, sem nenhum id do gateway', async () => {
+    const res = await req('/portal/subscription', { token: TOKEN_A });
+    expect(res.status).toBe(200);
+    const texto = await res.text();
+    expect(texto).not.toContain('sub_A');
+    expect(texto).not.toContain('auth_A');
+    expect(texto).not.toContain('cus_');
+    const body = JSON.parse(texto) as { data: Row };
+    expect(body.data).toMatchObject({
+      status: 'active',
+      price: 67,
+      method: 'Pix Automático',
+      can_cancel: true,
+    });
+  });
+
+  it('cancela: desliga a cobranca no gateway, marca o vinculo e MANTEM a conta ativa', async () => {
+    const res = await req('/portal/cancel', { method: 'POST', token: TOKEN_A });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { data: Row };
+    expect(body.data.status).toBe('canceled');
+    expect(body.data.access_until).toBe(FUTURO_PROXIMO);
+
+    expect(cancelSubscription).toHaveBeenCalledWith(expect.anything(), 'sub_A');
+    expect(cancelPixAutomaticAuthorization).toHaveBeenCalledWith(expect.anything(), 'auth_A');
+    expect(db.billing_subscriptions!.find(b => b.tenant_id === 'tA')!.status).toBe('canceled');
+    // O periodo pago vale ate o fim: nada de pausar agora.
+    expect(db.connected_accounts!.every(a => a.status !== 'paused')).toBe(true);
+  });
+
+  it('gateway sem confirmar o cancelamento: 502 e o vinculo NAO muda', async () => {
+    vi.mocked(cancelSubscription).mockResolvedValueOnce(false);
+    vi.mocked(cancelPixAutomaticAuthorization).mockResolvedValueOnce(false);
+    const res = await req('/portal/cancel', { method: 'POST', token: TOKEN_A });
+    expect(res.status).toBe(502);
+    expect(db.billing_subscriptions!.find(b => b.tenant_id === 'tA')!.status).toBe('active');
+  });
+
+  it('cancelar de novo e idempotente, e nao chama o gateway outra vez', async () => {
+    await req('/portal/cancel', { method: 'POST', token: TOKEN_A });
+    vi.mocked(cancelSubscription).mockClear();
+    const res = await req('/portal/cancel', { method: 'POST', token: TOKEN_A });
+    expect(res.status).toBe(200);
+    expect(cancelSubscription).not.toHaveBeenCalled();
+  });
+
+  it('teto por tenant nas tentativas de cancelamento', async () => {
+    const env = baseEnv();
+    for (let i = 0; i < 10; i++) {
+      await req('/portal/cancel', { method: 'POST', token: TOKEN_A }, env);
+    }
+    const excesso = await req('/portal/cancel', { method: 'POST', token: TOKEN_A }, env);
+    expect(excesso.status).toBe(429);
+  });
+
+  it('sem sessao nao cancela nada', async () => {
+    const res = await req('/portal/cancel', { method: 'POST' });
+    expect(res.status).toBe(401);
+    expect(db.billing_subscriptions!.find(b => b.tenant_id === 'tA')!.status).toBe('active');
   });
 });

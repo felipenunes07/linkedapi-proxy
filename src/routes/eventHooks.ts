@@ -315,6 +315,17 @@ eventHooks.post('/message-received', async (c) => {
 // do cartao. Mesma regra do atraso: pausa, nunca deleta.
 const BILLING_ACTIVE_EVENTS = new Set(['PAYMENT_CONFIRMED', 'PAYMENT_RECEIVED', 'CHECKOUT_PAID']);
 const BILLING_OVERDUE_EVENTS = new Set(['PAYMENT_OVERDUE', 'PAYMENT_CHARGEBACK_REQUESTED']);
+// Assinatura encerrada, no painel do gateway ou no app do banco do cliente
+// (F2.37). Antes disso nada disso era escutado: quem cancelasse por fora
+// seguia usando, porque sem cobranca nova nao vem PAYMENT_OVERDUE e nada
+// pausava. Cancelar NAO corta na hora: o acesso vale ate o fim do periodo
+// pago (access_until), e a faxina pausa quando ele vencer.
+const BILLING_CANCEL_EVENTS = new Set(['SUBSCRIPTION_DELETED', 'SUBSCRIPTION_INACTIVATED']);
+
+// Folga do ciclo mensal: vencimento pago + isto = ate quando a conta serve.
+// Dois dias a mais do que o mes cheio, para o cliente nunca perder acesso por
+// causa da fila do gateway ou de fim de semana.
+const CICLO_COM_FOLGA_MS = 33 * 24 * 60 * 60 * 1000;
 
 eventHooks.post('/billing', async (c) => {
   const denied = await gate(c, 'asaas-access-token', c.env.ASAAS_HOOK_TOKEN, true);
@@ -356,10 +367,18 @@ eventHooks.post('/billing', async (c) => {
     return c.json({ ok: true, ignored: true });
   }
 
+  // SUBSCRIPTION_*: o objeto que vem e a assinatura, nao a cobranca.
+  const assinaturaDoEvento = asRecord(raiz.subscription);
+  const cancelada = BILLING_CANCEL_EVENTS.has(event);
+  if (cancelada) {
+    subscriptionId ??= pickString(assinaturaDoEvento, 'id');
+    customerId ??= pickString(assinaturaDoEvento, 'customer');
+  }
+
   const goesActive = BILLING_ACTIVE_EVENTS.has(event);
   const goesOverdue = BILLING_OVERDUE_EVENTS.has(event);
   const chave = checkoutSession ?? subscriptionId ?? customerId ?? paymentId;
-  if ((!goesActive && !goesOverdue) || !chave) {
+  if ((!goesActive && !goesOverdue && !cancelada) || !chave) {
     return c.json({ ok: true, ignored: true });
   }
   // Ordem de resolucao (review F2.25, B1):
@@ -540,6 +559,27 @@ eventHooks.post('/billing', async (c) => {
       }
     }
   }
+  if (cancelada) {
+    // Cancelou: o vinculo para de renovar, mas a conta continua servindo ate
+    // o fim do periodo ja pago. Quem pausa e a faxina, quando access_until
+    // vencer. Vinculo ja cancelado nao e reescrito (evento reentregue).
+    await supabaseUpdate(
+      c.env,
+      'billing_subscriptions',
+      { tenant_id: `eq.${sub.tenant_id}`, status: 'neq.canceled' },
+      { status: 'canceled', updated_at: new Date().toISOString() },
+    );
+    return c.json({ ok: true });
+  }
+
+  // Ate quando a conta serve: vencimento da cobranca paga (ou hoje) mais um
+  // ciclo com folga. E o que sustenta o "cancelou, usa ate o fim do mes pago".
+  const acessoAte = goesActive
+    ? new Date(
+        (Date.parse(pickString(payment, 'dueDate') ?? '') || Date.now()) + CICLO_COM_FOLGA_MS,
+      ).toISOString()
+    : null;
+
   await supabaseUpdate(
     c.env,
     'billing_subscriptions',
@@ -547,6 +587,7 @@ eventHooks.post('/billing', async (c) => {
     {
       status: goesActive ? 'active' : 'overdue',
       updated_at: new Date().toISOString(),
+      ...(acessoAte ? { access_until: acessoAte } : {}),
     },
   );
 

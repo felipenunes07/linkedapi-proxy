@@ -18,7 +18,7 @@ import { checkout } from './routes/checkout';
 import { selfservice } from './routes/selfservice';
 import { admin } from './routes/admin';
 import { portal } from './routes/portal';
-import { limparCheckoutsAbandonados } from './lib/limpeza';
+import { limparCheckoutsAbandonados, pausarAcessosVencidos } from './lib/limpeza';
 
 // Data plane: o proxy. Pipeline por request:
 //   autenticar chave -> resolver tenant + account_id (server-side)
@@ -288,6 +288,12 @@ export default Object.assign(app, {
       limparCheckoutsAbandonados(env).catch((err: unknown) => {
         // So o codigo interno (supabase_*_failed:<status>, asaas_*): sem segredo.
         console.error(`limpeza_falhou: ${err instanceof Error ? err.message : 'erro'}`);
+      }),
+    );
+    // Quem cancelou e ja passou do periodo pago: a conta pausa aqui (F2.37).
+    ctx.waitUntil(
+      pausarAcessosVencidos(env).catch((err: unknown) => {
+        console.error(`acessos_vencidos_falhou: ${err instanceof Error ? err.message : 'erro'}`);
       }),
     );
   },

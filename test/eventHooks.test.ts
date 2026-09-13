@@ -53,6 +53,10 @@ function matches(row: Record<string, unknown>, filters: Record<string, string>):
     }
     if (value.startsWith('eq.')) {
       if (String(row[key]) !== value.slice(3)) return false;
+    } else if (value.startsWith('neq.')) {
+      // PostgREST tem neq; sem isso no duble, o filtro de idempotencia do
+      // cancelamento (status != canceled) nao casava com linha nenhuma.
+      if (String(row[key]) === value.slice(4)) return false;
     } else if (value.startsWith('in.(')) {
       if (!value.slice(4, -1).split(',').includes(String(row[key]))) return false;
     } else {
@@ -1055,5 +1059,81 @@ describe('POST /hooks/billing, linha cancelada do mesmo cliente (F2.31)', () => 
     expect(linha).toContain('tR3');
     expect(linha).toContain('tR4');
     spy.mockRestore();
+  });
+});
+
+// F2.37: assinatura cancelada por fora (painel do gateway ou app do banco).
+// Antes disso, nada era escutado: sem cobranca nova nao vem PAYMENT_OVERDUE, e
+// a conta seguia servindo para sempre. Cancelar NAO corta na hora, o periodo
+// pago vale ate o fim.
+describe('POST /hooks/billing, assinatura cancelada (F2.37)', () => {
+  beforeEach(() => {
+    db.tenants.tCan = { webhook_url: null, webhook_secret: null };
+    db.accounts.push({
+      id: 'ca-can',
+      tenant_id: 'tCan',
+      unipile_account_id: 'ua-can',
+      status: 'active',
+    });
+    db.billing.push({
+      tenant_id: 'tCan',
+      asaas_subscription_id: 'sub_can',
+      asaas_customer_id: 'cus_can',
+      payment_method: 'pix_automatic',
+      status: 'active',
+    });
+  });
+
+  it('SUBSCRIPTION_DELETED marca cancelado e NAO pausa a conta agora', async () => {
+    const res = await post(
+      '/hooks/billing',
+      { event: 'SUBSCRIPTION_DELETED', subscription: { id: 'sub_can' } },
+      { 'asaas-access-token': ASAAS_TOKEN },
+    );
+    expect(res.status).toBe(200);
+    expect(db.billing.find((b) => b.tenant_id === 'tCan')?.status).toBe('canceled');
+    expect(db.accounts.find((a) => a.tenant_id === 'tCan')?.status).toBe('active');
+  });
+
+  it('SUBSCRIPTION_INACTIVATED vale igual, e reentrega nao muda nada', async () => {
+    await post(
+      '/hooks/billing',
+      { event: 'SUBSCRIPTION_INACTIVATED', subscription: { id: 'sub_can' } },
+      { 'asaas-access-token': ASAAS_TOKEN },
+    );
+    const res = await post(
+      '/hooks/billing',
+      { event: 'SUBSCRIPTION_INACTIVATED', subscription: { id: 'sub_can' } },
+      { 'asaas-access-token': ASAAS_TOKEN },
+    );
+    expect(res.status).toBe(200);
+    expect(db.billing.find((b) => b.tenant_id === 'tCan')?.status).toBe('canceled');
+  });
+
+  it('pagamento confirmado grava ate quando a conta serve (periodo pago)', async () => {
+    await post(
+      '/hooks/billing',
+      {
+        event: 'PAYMENT_CONFIRMED',
+        payment: { id: 'pay_can', subscription: 'sub_can', dueDate: '2026-09-10' },
+      },
+      { 'asaas-access-token': ASAAS_TOKEN },
+    );
+    const linha = db.billing.find((b) => b.tenant_id === 'tCan') as Record<string, unknown>;
+    expect(linha.status).toBe('active');
+    const ate = Date.parse(String(linha.access_until));
+    // Vencimento pago + um ciclo com folga: dentro de outubro.
+    expect(ate).toBeGreaterThan(Date.parse('2026-10-10'));
+    expect(ate).toBeLessThan(Date.parse('2026-10-16'));
+  });
+
+  it('evento de assinatura desconhecida nao cria nem toca nada', async () => {
+    const res = await post(
+      '/hooks/billing',
+      { event: 'SUBSCRIPTION_DELETED', subscription: { id: 'sub_que_nao_existe' } },
+      { 'asaas-access-token': ASAAS_TOKEN },
+    );
+    expect(await res.json()).toEqual({ ok: true, ignored: true });
+    expect(db.billing.find((b) => b.tenant_id === 'tCan')?.status).toBe('active');
   });
 });

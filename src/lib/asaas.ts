@@ -523,6 +523,35 @@ export async function cancelSubscription(
   return res.ok;
 }
 
+// Dados da assinatura para a tela de assinatura do cliente (F2.37). So o que
+// a tela mostra: quando cai a proxima e como ele paga. Nada de ids nem de
+// detalhe da nossa conta no gateway.
+export async function getSubscription(
+  env: Env,
+  subscriptionId: string,
+): Promise<{ nextDueDate: string | null; billingType: string | null; status: string | null } | null> {
+  let res: Response;
+  try {
+    res = await asaasFetch(env, `/subscriptions/${encodeURIComponent(subscriptionId)}`);
+  } catch {
+    return null;
+  }
+  if (!res.ok) {
+    return null;
+  }
+  const data = await readJson<{
+    nextDueDate?: string;
+    billingType?: string;
+    status?: string;
+  }>(res, 'asaas_subscription_get_failed').catch(() => null);
+  if (!data) return null;
+  return {
+    nextDueDate: typeof data.nextDueDate === 'string' ? data.nextDueDate : null,
+    billingType: typeof data.billingType === 'string' ? data.billingType : null,
+    status: typeof data.status === 'string' ? data.status : null,
+  };
+}
+
 // Primeira cobranca da assinatura (a que o cliente paga agora).
 export async function firstPaymentId(
   env: Env,
