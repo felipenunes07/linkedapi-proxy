@@ -28,14 +28,9 @@
   "routes": [{ "pattern": "api.playbooklab.com.br", "custom_domain": true }],
 
   // Faxina de checkouts abandonados (src/lib/limpeza.ts), de hora em hora.
-  // TEMPORARIO (F2.34): a conta nova ainda nao tem subdominio workers.dev, e o
-  // deploy do cron falha sem ele (`code: 10063`). Basta abrir Workers & Pages
-  // no painel da conta uma vez; depois disso, descomentar e publicar. Enquanto
-  // isso o Worker ANTIGO (conta do Victor) segue com o cron da faxina, que
-  // trabalha no mesmo banco.
-  // "triggers": {
-  //   "crons": ["23 * * * *"]
-  // },
+  "triggers": {
+    "crons": ["23 * * * *"]
+  },
 
   // Variaveis NAO secretas podem ir em "vars". Segredos, nunca.
   "vars": {
