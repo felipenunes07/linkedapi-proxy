@@ -11,6 +11,8 @@
 
 // Exportados: os hooks de evento (fase 2) usam a mesma disciplina de whitelist
 // para projetar payloads externos antes de repassar ao cliente.
+import { cursorParaCliente } from './cursor';
+
 export function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === 'object' && value !== null
     ? (value as Record<string, unknown>)
@@ -78,5 +80,6 @@ export function sanitizeChatList(raw: unknown): {
       attendee_provider_id: pickString(chat, 'attendee_provider_id'),
     };
   });
-  return { items, cursor: pickString(obj, 'cursor') };
+  // O cursor sai sem o account_id que a origem embute nele (ver lib/cursor).
+  return { items, cursor: cursorParaCliente(pickString(obj, 'cursor')) };
 }

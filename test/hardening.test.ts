@@ -139,7 +139,7 @@ describe('sanitizacao das respostas de sucesso (white-label)', () => {
     expect(text).not.toContain(ACCT);
   });
 
-  it('GET /v1/chats: whitelist por item, account_id do chat nunca sai, cursor passa', async () => {
+  it('GET /v1/chats: whitelist por item, e nem o chat nem o CURSOR carregam a conta', async () => {
     vi.mocked(listChats).mockResolvedValue(
       jsonResponse({
         object: 'ChatList',
@@ -155,7 +155,7 @@ describe('sanitizacao das respostas de sucesso (white-label)', () => {
             attendee_provider_id: 'p9',
           },
         ],
-        cursor: 'cur1',
+        cursor: 'eyJhY2NvdW50X2lkIjogWyJjb250YS1kYS1vcmlnZW0iXSwgImxpbWl0IjogMiwgImN1cnNvciI6IHsibGFzdF9pZCI6ICJ4In19',
       }),
     );
     const res = await app.request(
@@ -178,9 +178,13 @@ describe('sanitizacao das respostas de sucesso (white-label)', () => {
             attendee_provider_id: 'p9',
           },
         ],
-        cursor: 'cur1',
+        cursor: expect.any(String),
       },
     });
+    // O que importa no cursor e o conteudo: paginacao preservada, conta fora.
+    const cursorDevolvido = JSON.parse(atob(JSON.parse(text).data.cursor));
+    expect(cursorDevolvido).toEqual({ limit: 2, cursor: { last_id: 'x' } });
+    expect(cursorDevolvido).not.toHaveProperty('account_id');
     expect(text).not.toContain(ACCT);
     expect(text).not.toContain('interno-mb');
   });

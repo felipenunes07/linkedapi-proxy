@@ -134,11 +134,26 @@ describe('GET /v1/chats', () => {
     expect(accountUsed).toBe(ACCT_B);
   });
 
-  it('repassa so paginacao (limit/cursor), account_id sempre do tenant', async () => {
-    const res = await getChats(KEY_A, '?limit=10&cursor=abc');
+  it('repassa so paginacao, e o cursor vai para a origem com a conta do TENANT', async () => {
+    // O cursor da origem carrega o account_id dentro, e a origem obedece a ele
+    // antes do query string: sem reescrever, um cursor forjado leria a conta de
+    // outro tenant (achado E2E de 2026-09-13).
+    const forjado = 'eyJhY2NvdW50X2lkIjogWyJjb250YS1kZS1PVVRSTyJdLCAibGltaXQiOiAyLCAiY3Vyc29yIjogeyJsYXN0X2lkIjogIngifX0=';
+    const res = await getChats(KEY_A, `?limit=10&cursor=${forjado}`);
     expect(res.status).toBe(200);
     const [, accountUsed, opts] = vi.mocked(listChats).mock.calls.at(-1) ?? [];
     expect(accountUsed).toBe(ACCT_A);
-    expect(opts).toEqual({ limit: '10', cursor: 'abc' });
+    expect(opts?.limit).toBe('10');
+    const enviado = JSON.parse(atob(String(opts?.cursor)));
+    expect(enviado.account_id).toEqual([ACCT_A]);
+    expect(enviado.cursor).toEqual({ last_id: 'x' });
+  });
+
+  it('cursor ilegivel nao vira requisicao: 400 e a origem nem e chamada', async () => {
+    vi.mocked(listChats).mockClear();
+    const res = await getChats(KEY_A, '?cursor=nao-e-base64-de-json');
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid_cursor' });
+    expect(listChats).not.toHaveBeenCalled();
   });
 });

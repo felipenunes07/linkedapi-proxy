@@ -9,6 +9,7 @@ import {
   sanitizeInvitationSent,
   sanitizeChatList,
 } from './lib/sanitize';
+import { cursorParaOrigem } from './lib/cursor';
 import openapi from '../openapi.json';
 import { docsHtml } from './lib/docs';
 import { connectHooks } from './routes/connect';
@@ -241,10 +242,25 @@ v1.post('/invitations', async (c) => {
 v1.get('/chats', async (c) => {
   const tenant = c.get('tenant');
 
+  // O cursor da origem carrega o account_id DENTRO dele, e a origem obedece a
+  // esse valor antes do que mandamos no query string: sem reescrever, um
+  // cursor forjado leria a conta de outro tenant (achado E2E de 2026-09-13).
+  // Entra sempre com a conta resolvida no servidor; cursor ilegivel nao vira
+  // requisicao.
+  const cursorDoCliente = c.req.query('cursor');
+  let cursor: string | undefined;
+  if (cursorDoCliente !== undefined) {
+    const reescrito = cursorParaOrigem(cursorDoCliente, tenant.unipileAccountId);
+    if (!reescrito) {
+      return c.json({ error: 'invalid_cursor' }, 400);
+    }
+    cursor = reescrito;
+  }
+
   // Repassamos so paginacao. account_id NUNCA vem do request.
   const res = await listChats(c.env, tenant.unipileAccountId, {
     limit: c.req.query('limit'),
-    cursor: c.req.query('cursor'),
+    cursor,
   });
 
   if (!res.ok) {
