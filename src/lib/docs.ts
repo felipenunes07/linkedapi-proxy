@@ -35,29 +35,32 @@ const ESTILO = `
 
   /* Escuro por padrao (o toggle do Scalar continua valendo), com a paleta da
      marca: e a mesma tela, so que nossa. */
+  /* Escuro NEUTRO, medido na referencia: o fundo dela e rgb(11,12,13), sem
+     azul. O azul fica onde ele e marca (a barra do topo), nao no papel. */
   .dark-mode {
-    --scalar-background-1: #0d1b24;
-    --scalar-background-2: #12212b;
-    --scalar-background-3: #172a36;
-    --scalar-color-1: #e6edf3;
-    --scalar-color-2: #a9bac6;
-    --scalar-color-3: #7d8f9c;
+    --scalar-background-1: #0b0c0d;
+    --scalar-background-2: #141517;
+    --scalar-background-3: #1b1c1e;
+    --scalar-color-1: #ffffff;
+    --scalar-color-2: #a8adb4;
+    --scalar-color-3: #7c828a;
     --scalar-color-accent: var(--doc-yellow);
-    --scalar-background-accent: #1d3341;
-    --scalar-border-color: #1e3240;
+    --scalar-background-accent: #1f2022;
+    --scalar-border-color: #26282b;
   }
   .dark-mode .sidebar {
-    --scalar-sidebar-background-1: #0a141b;
-    --scalar-sidebar-color-1: #e6edf3;
-    --scalar-sidebar-color-2: #8ea0ad;
-    --scalar-sidebar-border-color: #1e3240;
-    --scalar-sidebar-item-hover-background: #12212b;
+    --scalar-sidebar-background-1: #0b0c0d;
+    --scalar-sidebar-color-1: #e8eaed;
+    --scalar-sidebar-color-2: #9aa0a6;
+    --scalar-sidebar-border-color: #26282b;
+    --scalar-sidebar-item-hover-background: rgba(255, 255, 255, 0.05);
     --scalar-sidebar-item-hover-color: #ffffff;
-    --scalar-sidebar-item-active-background: #172a36;
+    /* O ativo da referencia e branco a 9%. */
+    --scalar-sidebar-item-active-background: rgba(255, 255, 255, 0.09);
     --scalar-sidebar-color-active: #ffffff;
-    --scalar-sidebar-search-background: #0d1b24;
-    --scalar-sidebar-search-border-color: #1e3240;
-    --scalar-sidebar-search-color: #8ea0ad;
+    --scalar-sidebar-search-background: #141517;
+    --scalar-sidebar-search-border-color: #26282b;
+    --scalar-sidebar-search-color: #9aa0a6;
   }
   .light-mode {
     --scalar-background-1: #ffffff;
