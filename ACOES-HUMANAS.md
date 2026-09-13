@@ -72,17 +72,21 @@ custom domain exige zona e Worker na MESMA conta e a zona
 `playbooklab.com.br` esta la. O que foi migrado: KV novo
 (`b79c9339...`), os 10 secrets, o dominio proprio e os webhooks.
 
-**Falta um clique de quem tem o painel da conta do Fernando:** abrir
-**Workers & Pages** uma vez, o que cria o subdominio `workers.dev` da conta.
-Sem ele o deploy do CRON falha (`code: 10063`) e a faxina de checkouts
-abandonados nao roda no Worker novo. Depois de abrir, me avise: eu
-descomento o bloco `triggers` do `wrangler.jsonc` e publico.
+~~Falta um clique~~ FEITO: a conta ganhou o subdominio `fernando-31d.workers.dev`
+e o cron da faxina voltou (`schedule: 23 * * * *` confirmado no deploy).
 
-Enquanto isso o Worker ANTIGO (conta do Victor) segue publicado e com o cron
-dele, trabalhando no mesmo banco: a faxina continua acontecendo. **Depois do
-cron no novo, apagar o antigo** (painel da conta do Victor, Workers & Pages,
-`linkedapi-proxy` > Settings > Delete), senao ficam dois Workers vivos
-respondendo no `workers.dev` antigo.
+**Ultimo passo, na conta do VICTOR:** apagar o Worker antigo. Ele nao recebe
+mais webhook nenhum (todos apontam para o dominio novo), mas continua
+publicado e com o cron da faxina rodando no MESMO banco. Dois processos
+mexendo nos mesmos checkouts abandonados nao e desenho, e sobra.
+
+```bash
+npx wrangler delete --name linkedapi-proxy   # com a conta do Victor selecionada
+```
+
+Ou pelo painel: conta do Victor > Workers & Pages > linkedapi-proxy >
+Settings > Delete. Voltar atras, se precisar, e um `npm run deploy` apontando
+o `account_id` de volta.
 
 Webhooks ja reapontados para o dominio novo e conferidos no ar:
 - Unipile `linkedapi-account-status` e `linkedapi-message-received` (os antigos
