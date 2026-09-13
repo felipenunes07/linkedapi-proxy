@@ -90,6 +90,11 @@ const ESTILO = `
      que o botao aciona), apenas escondida. */
   .doc-sem-busca-lateral { display: none !important; }
 
+  /* Rodape da lateral do Scalar (Open API Client, Generate MCP, Powered by
+     Scalar): e propaganda da plataforma deles dentro da nossa documentacao.
+     O alternador de tema, que morava ali, ja esta na nossa barra. */
+  .doc-sem-rodape-lateral { display: none !important; }
+
   /* Barra propria, na cor da marca. Duas faixas, como o topo de uma doc de
      API: marca + busca centralizada + links, e embaixo versao e abas. */
   .doc-barra {
@@ -283,12 +288,21 @@ export function docsHtml(env: Env): string {
       var tentativas = 0;
       var procura = setInterval(function () {
         var alvo = gatilhoDaBusca();
+        var lateral = document.querySelector('aside');
+        var pronto = false;
         if (alvo && alvo.parentElement) {
           alvo.parentElement.classList.add('doc-sem-busca-lateral');
-          clearInterval(procura);
-        } else if (++tentativas > 20) {
-          clearInterval(procura);
+          pronto = true;
         }
+        // O rodape da lateral e o ultimo filho dela: e onde a plataforma do
+        // Scalar poe os proprios botoes.
+        if (lateral && lateral.lastElementChild) {
+          var rodape = lateral.lastElementChild;
+          if (/scalar|api client|mcp/i.test(rodape.textContent || '')) {
+            rodape.classList.add('doc-sem-rodape-lateral');
+          }
+        }
+        if (pronto || ++tentativas > 20) clearInterval(procura);
       }, 250);
     </script>
   </body>

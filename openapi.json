@@ -3,7 +3,7 @@
   "info": {
     "title": "Playbook API",
     "version": "1.0.0",
-    "description": "API para automacao de LinkedIn. Autentique com sua chave no header `X-API-KEY` e use os endpoints abaixo para enviar mensagens, enviar convites e listar suas conversas.\n\nA conta de LinkedIn usada em cada chamada e determinada pela sua chave, voce nao precisa (nem pode) informa-la no request.\n\nToda resposta de sucesso vem no envelope `{ \"ok\": true, \"data\": ... }`. Erros vem como `{ \"error\": \"<codigo>\" }`, com campos extras conforme o caso."
+    "description": "Envie mensagens e convites e leia suas conversas do LinkedIn a partir do seu sistema, com uma chave sua e sem instalar nada.\n\n## Autenticacao\n\nToda chamada leva a sua chave no header `X-API-KEY`. A chave nasce no painel, aparece uma unica vez e vale para a conta de LinkedIn daquele painel: a conta usada em cada chamada e determinada pela chave, voce nao precisa (nem pode) informa-la no request.\n\n```bash\ncurl https://api.playbooklab.com.br/v1/chats -H \"X-API-KEY: lk_live_...\"\n```\n\n## Primeira chamada\n\nComece por `GET /v1/chats`: ela lista suas conversas e e de onde sai o `chat_id` que voce usa para enviar mensagem. Leitura nao consome limite diario.\n\n## Respostas e erros\n\nSucesso vem sempre no envelope `{ \"ok\": true, \"data\": ... }`. Erro vem como `{ \"error\": \"<codigo>\" }`, com campos extras conforme o caso. Os codigos que mais aparecem:\n\n| Codigo | O que aconteceu |\n| --- | --- |\n| `invalid_api_key` | chave errada, revogada ou ausente |\n| `account_paused` | pagamento em atraso: a conta volta com o pagamento |\n| `linkedin_not_connected` | a conta do painel ainda nao conectou o LinkedIn |\n| `rate_limited` | limite diario atingido (veja abaixo) |\n| `not_found` | o recurso nao existe ou nao e desta conta |\n\n## Limites diarios\n\nEnviar mensagem e enviar convite sao as acoes que o LinkedIn restringe quando usadas em volume, entao existe um teto por dia: **80 mensagens** e **30 convites**, que zeram as 21h (horario de Brasilia). Listar conversas nao consome nada. O teto protege o seu perfil, nao a nossa infraestrutura.\n\n## Webhooks\n\nCadastre uma URL https no painel e passamos a avisar o seu sistema, com assinatura HMAC no header `X-Webhook-Signature`, quando chegar mensagem nova e quando a conexao do LinkedIn cair. Os endpoints de webhook estao em **Conta**, abaixo.\n\n## Suporte\n\nDuvida ou algo fora do esperado: victor@playbooklab.com.br."
   },
   "servers": [
     {
@@ -15,17 +15,35 @@
       "description": "Ambiente local de desenvolvimento"
     }
   ],
-  "security": [{ "apiKey": [] }],
+  "security": [
+    {
+      "apiKey": []
+    }
+  ],
   "tags": [
-    { "name": "Mensagens", "description": "Enviar mensagens em conversas existentes." },
-    { "name": "Convites", "description": "Enviar convites de conexao." },
-    { "name": "Conversas", "description": "Listar suas conversas." },
-    { "name": "Conta", "description": "Gerencie sua chave e seu webhook de eventos." }
+    {
+      "name": "Mensagens",
+      "description": "Enviar mensagens em conversas existentes."
+    },
+    {
+      "name": "Convites",
+      "description": "Enviar convites de conexao."
+    },
+    {
+      "name": "Conversas",
+      "description": "Listar suas conversas."
+    },
+    {
+      "name": "Conta",
+      "description": "Gerencie sua chave e seu webhook de eventos."
+    }
   ],
   "paths": {
     "/v1/messages": {
       "post": {
-        "tags": ["Mensagens"],
+        "tags": [
+          "Mensagens"
+        ],
         "summary": "Enviar mensagem",
         "description": "Envia uma mensagem de texto em uma conversa que ja existe. Use `GET /v1/chats` para obter o `chat_id`.",
         "operationId": "sendMessage",
@@ -33,8 +51,13 @@
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/SendMessageRequest" },
-              "example": { "chat_id": "abc123", "text": "Ola! Tudo bem?" }
+              "schema": {
+                "$ref": "#/components/schemas/SendMessageRequest"
+              },
+              "example": {
+                "chat_id": "abc123",
+                "text": "Ola! Tudo bem?"
+              }
             }
           }
         },
@@ -43,24 +66,47 @@
             "description": "Mensagem enviada.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/MessageSentEnvelope" },
-                "example": { "ok": true, "data": { "message_id": "msg_abc123" } }
+                "schema": {
+                  "$ref": "#/components/schemas/MessageSentEnvelope"
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "message_id": "msg_abc123"
+                  }
+                }
               }
             }
           },
-          "400": { "$ref": "#/components/responses/BadRequest" },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "402": { "$ref": "#/components/responses/AccountPaused" },
-          "409": { "$ref": "#/components/responses/AccountNotReady" },
-          "404": { "$ref": "#/components/responses/NotFound" },
-          "429": { "$ref": "#/components/responses/RateLimited" },
-          "502": { "$ref": "#/components/responses/UpstreamError" }
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/AccountPaused"
+          },
+          "409": {
+            "$ref": "#/components/responses/AccountNotReady"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          }
         }
       }
     },
     "/v1/invitations": {
       "post": {
-        "tags": ["Convites"],
+        "tags": [
+          "Convites"
+        ],
         "summary": "Enviar convite",
         "description": "Envia um convite de conexao para um destinatario. O `provider_id` e o identificador do destinatario no LinkedIn.",
         "operationId": "sendInvitation",
@@ -68,7 +114,9 @@
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/SendInvitationRequest" },
+              "schema": {
+                "$ref": "#/components/schemas/SendInvitationRequest"
+              },
               "example": {
                 "provider_id": "ACoAAB1234567890",
                 "message": "Oi! Gostaria de conectar."
@@ -81,24 +129,47 @@
             "description": "Convite enviado.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/InvitationSentEnvelope" },
-                "example": { "ok": true, "data": { "invitation_id": "inv_abc123" } }
+                "schema": {
+                  "$ref": "#/components/schemas/InvitationSentEnvelope"
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "invitation_id": "inv_abc123"
+                  }
+                }
               }
             }
           },
-          "400": { "$ref": "#/components/responses/BadRequest" },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "402": { "$ref": "#/components/responses/AccountPaused" },
-          "409": { "$ref": "#/components/responses/AccountNotReady" },
-          "404": { "$ref": "#/components/responses/NotFoundProfile" },
-          "429": { "$ref": "#/components/responses/RateLimited" },
-          "502": { "$ref": "#/components/responses/UpstreamError" }
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/AccountPaused"
+          },
+          "409": {
+            "$ref": "#/components/responses/AccountNotReady"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFoundProfile"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          }
         }
       }
     },
     "/v1/chats": {
       "get": {
-        "tags": ["Conversas"],
+        "tags": [
+          "Conversas"
+        ],
         "summary": "Listar conversas",
         "description": "Lista suas conversas. Use o `id` de cada conversa como `chat_id` ao enviar mensagens. Suporta paginacao por cursor.",
         "operationId": "listChats",
@@ -108,14 +179,19 @@
             "in": "query",
             "required": false,
             "description": "Numero maximo de conversas a retornar.",
-            "schema": { "type": "integer", "minimum": 1 }
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
           },
           {
             "name": "cursor",
             "in": "query",
             "required": false,
             "description": "Cursor de paginacao retornado por uma chamada anterior.",
-            "schema": { "type": "string" }
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -123,7 +199,9 @@
             "description": "Lista de conversas (ver ChatListEnvelope).",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/ChatListEnvelope" },
+                "schema": {
+                  "$ref": "#/components/schemas/ChatListEnvelope"
+                },
                 "example": {
                   "ok": true,
                   "data": {
@@ -143,16 +221,26 @@
               }
             }
           },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "402": { "$ref": "#/components/responses/AccountPaused" },
-          "409": { "$ref": "#/components/responses/AccountNotReady" },
-          "502": { "$ref": "#/components/responses/UpstreamError" }
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/AccountPaused"
+          },
+          "409": {
+            "$ref": "#/components/responses/AccountNotReady"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          }
         }
       }
     },
     "/v1/keys/rotate": {
       "post": {
-        "tags": ["Conta"],
+        "tags": [
+          "Conta"
+        ],
         "summary": "Trocar sua chave",
         "description": "Gera uma chave nova e revoga a chave usada nesta chamada. O valor novo aparece UMA unica vez, na resposta: guarde-o imediatamente.",
         "operationId": "rotateKey",
@@ -161,7 +249,9 @@
             "description": "Chave trocada.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/KeyRotatedEnvelope" },
+                "schema": {
+                  "$ref": "#/components/schemas/KeyRotatedEnvelope"
+                },
                 "example": {
                   "ok": true,
                   "data": {
@@ -172,15 +262,23 @@
               }
             }
           },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "402": { "$ref": "#/components/responses/AccountPaused" },
-          "409": { "$ref": "#/components/responses/AccountNotReady" }
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/AccountPaused"
+          },
+          "409": {
+            "$ref": "#/components/responses/AccountNotReady"
+          }
         }
       }
     },
     "/v1/webhook": {
       "put": {
-        "tags": ["Conta"],
+        "tags": [
+          "Conta"
+        ],
         "summary": "Configurar webhook de eventos",
         "description": "Registra a URL https que recebera seus eventos (ex.: `message.received` quando alguem responde uma conversa; `account.disconnected` com um link de reconexao quando sua sessao cair). Cada entrega e um POST JSON `{type, data}` assinado: valide `X-Webhook-Signature` (sha256=HMAC-SHA256 do `\"{X-Webhook-Timestamp}.{corpo}\"` com o secret retornado aqui). O secret aparece UMA unica vez.",
         "operationId": "configureWebhook",
@@ -190,7 +288,9 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["url"],
+                "required": [
+                  "url"
+                ],
                 "additionalProperties": false,
                 "properties": {
                   "url": {
@@ -199,7 +299,9 @@
                   }
                 }
               },
-              "example": { "url": "https://meuapp.com.br/webhooks/linkedapi" }
+              "example": {
+                "url": "https://meuapp.com.br/webhooks/linkedapi"
+              }
             }
           }
         },
@@ -208,18 +310,30 @@
             "description": "Webhook configurado.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/WebhookConfiguredEnvelope" }
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookConfiguredEnvelope"
+                }
               }
             }
           },
-          "400": { "$ref": "#/components/responses/BadRequest" },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "402": { "$ref": "#/components/responses/AccountPaused" },
-          "409": { "$ref": "#/components/responses/AccountNotReady" }
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/AccountPaused"
+          },
+          "409": {
+            "$ref": "#/components/responses/AccountNotReady"
+          }
         }
       },
       "get": {
-        "tags": ["Conta"],
+        "tags": [
+          "Conta"
+        ],
         "summary": "Ver configuracao do webhook",
         "operationId": "getWebhook",
         "responses": {
@@ -227,21 +341,34 @@
             "description": "Configuracao atual (o secret nunca e reexibido).",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/WebhookStatusEnvelope" },
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookStatusEnvelope"
+                },
                 "example": {
                   "ok": true,
-                  "data": { "url": "https://meuapp.com.br/webhooks/linkedapi", "configured": true }
+                  "data": {
+                    "url": "https://meuapp.com.br/webhooks/linkedapi",
+                    "configured": true
+                  }
                 }
               }
             }
           },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "402": { "$ref": "#/components/responses/AccountPaused" },
-          "409": { "$ref": "#/components/responses/AccountNotReady" }
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/AccountPaused"
+          },
+          "409": {
+            "$ref": "#/components/responses/AccountNotReady"
+          }
         }
       },
       "delete": {
-        "tags": ["Conta"],
+        "tags": [
+          "Conta"
+        ],
         "summary": "Remover webhook",
         "operationId": "deleteWebhook",
         "responses": {
@@ -249,14 +376,27 @@
             "description": "Webhook removido.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/WebhookStatusEnvelope" },
-                "example": { "ok": true, "data": { "configured": false } }
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookStatusEnvelope"
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "configured": false
+                  }
+                }
               }
             }
           },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "402": { "$ref": "#/components/responses/AccountPaused" },
-          "409": { "$ref": "#/components/responses/AccountNotReady" }
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/AccountPaused"
+          },
+          "409": {
+            "$ref": "#/components/responses/AccountNotReady"
+          }
         }
       }
     }
@@ -273,7 +413,10 @@
     "schemas": {
       "SendMessageRequest": {
         "type": "object",
-        "required": ["chat_id", "text"],
+        "required": [
+          "chat_id",
+          "text"
+        ],
         "additionalProperties": false,
         "properties": {
           "chat_id": {
@@ -289,7 +432,9 @@
       },
       "SendInvitationRequest": {
         "type": "object",
-        "required": ["provider_id"],
+        "required": [
+          "provider_id"
+        ],
         "additionalProperties": false,
         "properties": {
           "provider_id": {
@@ -304,15 +449,26 @@
       },
       "MessageSentEnvelope": {
         "type": "object",
-        "required": ["ok", "data"],
+        "required": [
+          "ok",
+          "data"
+        ],
         "properties": {
-          "ok": { "type": "boolean", "const": true },
+          "ok": {
+            "type": "boolean",
+            "const": true
+          },
           "data": {
             "type": "object",
-            "required": ["message_id"],
+            "required": [
+              "message_id"
+            ],
             "properties": {
               "message_id": {
-                "type": ["string", "null"],
+                "type": [
+                  "string",
+                  "null"
+                ],
                 "description": "Identificador da mensagem enviada."
               }
             }
@@ -321,15 +477,26 @@
       },
       "InvitationSentEnvelope": {
         "type": "object",
-        "required": ["ok", "data"],
+        "required": [
+          "ok",
+          "data"
+        ],
         "properties": {
-          "ok": { "type": "boolean", "const": true },
+          "ok": {
+            "type": "boolean",
+            "const": true
+          },
           "data": {
             "type": "object",
-            "required": ["invitation_id"],
+            "required": [
+              "invitation_id"
+            ],
             "properties": {
               "invitation_id": {
-                "type": ["string", "null"],
+                "type": [
+                  "string",
+                  "null"
+                ],
                 "description": "Identificador do convite enviado."
               }
             }
@@ -338,19 +505,33 @@
       },
       "ChatListEnvelope": {
         "type": "object",
-        "required": ["ok", "data"],
+        "required": [
+          "ok",
+          "data"
+        ],
         "properties": {
-          "ok": { "type": "boolean", "const": true },
+          "ok": {
+            "type": "boolean",
+            "const": true
+          },
           "data": {
             "type": "object",
-            "required": ["items", "cursor"],
+            "required": [
+              "items",
+              "cursor"
+            ],
             "properties": {
               "items": {
                 "type": "array",
-                "items": { "$ref": "#/components/schemas/ChatSummary" }
+                "items": {
+                  "$ref": "#/components/schemas/ChatSummary"
+                }
               },
               "cursor": {
-                "type": ["string", "null"],
+                "type": [
+                  "string",
+                  "null"
+                ],
                 "description": "Cursor para a proxima pagina. `null` quando nao ha mais resultados."
               }
             }
@@ -361,69 +542,145 @@
         "type": "object",
         "description": "Resumo de uma conversa. Use `id` como `chat_id` ao enviar mensagens; `attendee_provider_id` e o mesmo identificador aceito em `POST /v1/invitations`.",
         "properties": {
-          "id": { "type": ["string", "null"], "description": "Id da conversa." },
-          "name": { "type": ["string", "null"], "description": "Nome da conversa/contato." },
-          "timestamp": { "type": ["string", "null"], "description": "Data/hora da ultima atividade (ISO 8601)." },
-          "unread_count": { "type": ["integer", "null"], "description": "Mensagens nao lidas." },
-          "archived": { "type": ["integer", "null"], "description": "1 se a conversa esta arquivada, 0 caso contrario." },
-          "attendee_provider_id": { "type": ["string", "null"], "description": "Identificador do contato no LinkedIn." }
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Id da conversa."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Nome da conversa/contato."
+          },
+          "timestamp": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Data/hora da ultima atividade (ISO 8601)."
+          },
+          "unread_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Mensagens nao lidas."
+          },
+          "archived": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "1 se a conversa esta arquivada, 0 caso contrario."
+          },
+          "attendee_provider_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Identificador do contato no LinkedIn."
+          }
         }
       },
       "KeyRotatedEnvelope": {
         "type": "object",
-        "required": ["ok", "data"],
+        "required": [
+          "ok",
+          "data"
+        ],
         "properties": {
-          "ok": { "type": "boolean", "const": true },
+          "ok": {
+            "type": "boolean",
+            "const": true
+          },
           "data": {
             "type": "object",
-            "required": ["api_key"],
+            "required": [
+              "api_key"
+            ],
             "properties": {
               "api_key": {
                 "type": "string",
                 "description": "Sua chave nova (formato lk_live_...). Exibida somente aqui."
               },
-              "note": { "type": "string" }
+              "note": {
+                "type": "string"
+              }
             }
           }
         }
       },
       "WebhookConfiguredEnvelope": {
         "type": "object",
-        "required": ["ok", "data"],
+        "required": [
+          "ok",
+          "data"
+        ],
         "properties": {
-          "ok": { "type": "boolean", "const": true },
+          "ok": {
+            "type": "boolean",
+            "const": true
+          },
           "data": {
             "type": "object",
-            "required": ["url", "secret"],
+            "required": [
+              "url",
+              "secret"
+            ],
             "properties": {
-              "url": { "type": "string" },
+              "url": {
+                "type": "string"
+              },
               "secret": {
                 "type": "string",
                 "description": "Secret de assinatura (formato lk_whsec_...). Exibido somente aqui; valida o header X-Webhook-Signature de cada evento."
               },
-              "note": { "type": "string" }
+              "note": {
+                "type": "string"
+              }
             }
           }
         }
       },
       "WebhookStatusEnvelope": {
         "type": "object",
-        "required": ["ok", "data"],
+        "required": [
+          "ok",
+          "data"
+        ],
         "properties": {
-          "ok": { "type": "boolean", "const": true },
+          "ok": {
+            "type": "boolean",
+            "const": true
+          },
           "data": {
             "type": "object",
-            "required": ["configured"],
+            "required": [
+              "configured"
+            ],
             "properties": {
-              "url": { "type": ["string", "null"] },
-              "configured": { "type": "boolean" }
+              "url": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "configured": {
+                "type": "boolean"
+              }
             }
           }
         }
       },
       "ErrorEnvelope": {
         "type": "object",
-        "required": ["error"],
+        "required": [
+          "error"
+        ],
         "properties": {
           "error": {
             "type": "string",
@@ -457,10 +714,20 @@
         "description": "Requisicao invalida (campo obrigatorio ausente ou JSON malformado).",
         "content": {
           "application/json": {
-            "schema": { "$ref": "#/components/schemas/ErrorEnvelope" },
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            },
             "examples": {
-              "missing_field": { "value": { "error": "missing_chat_id" } },
-              "invalid_json": { "value": { "error": "invalid_json" } }
+              "missing_field": {
+                "value": {
+                  "error": "missing_chat_id"
+                }
+              },
+              "invalid_json": {
+                "value": {
+                  "error": "invalid_json"
+                }
+              }
             }
           }
         }
@@ -469,10 +736,20 @@
         "description": "Chave ausente, invalida ou revogada.",
         "content": {
           "application/json": {
-            "schema": { "$ref": "#/components/schemas/ErrorEnvelope" },
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            },
             "examples": {
-              "missing_api_key": { "value": { "error": "missing_api_key" } },
-              "invalid_api_key": { "value": { "error": "invalid_api_key" } }
+              "missing_api_key": {
+                "value": {
+                  "error": "missing_api_key"
+                }
+              },
+              "invalid_api_key": {
+                "value": {
+                  "error": "invalid_api_key"
+                }
+              }
             }
           }
         }
@@ -481,8 +758,12 @@
         "description": "Sua conta esta pausada porque o pagamento da assinatura esta em atraso. Ela volta sozinha assim que o Pix for confirmado.",
         "content": {
           "application/json": {
-            "schema": { "$ref": "#/components/schemas/ErrorEnvelope" },
-            "example": { "error": "account_paused" }
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            },
+            "example": {
+              "error": "account_paused"
+            }
           }
         }
       },
@@ -490,10 +771,20 @@
         "description": "Sua chave e valida, mas nao ha LinkedIn ativo na conta: ou a sessao caiu (`account_disconnected`, reconecte pelo painel) ou nenhum LinkedIn foi conectado ainda (`linkedin_not_connected`).",
         "content": {
           "application/json": {
-            "schema": { "$ref": "#/components/schemas/ErrorEnvelope" },
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            },
             "examples": {
-              "account_disconnected": { "value": { "error": "account_disconnected" } },
-              "linkedin_not_connected": { "value": { "error": "linkedin_not_connected" } }
+              "account_disconnected": {
+                "value": {
+                  "error": "account_disconnected"
+                }
+              },
+              "linkedin_not_connected": {
+                "value": {
+                  "error": "linkedin_not_connected"
+                }
+              }
             }
           }
         }
@@ -503,12 +794,16 @@
         "headers": {
           "Retry-After": {
             "description": "Segundos ate a proxima janela.",
-            "schema": { "type": "integer" }
+            "schema": {
+              "type": "integer"
+            }
           }
         },
         "content": {
           "application/json": {
-            "schema": { "$ref": "#/components/schemas/ErrorEnvelope" },
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            },
             "example": {
               "error": "rate_limited",
               "action": "messages",
@@ -522,8 +817,13 @@
         "description": "A API esta no ar, mas a operacao falhou no sistema por tras dela. `upstream_status` traz o status recebido.",
         "content": {
           "application/json": {
-            "schema": { "$ref": "#/components/schemas/ErrorEnvelope" },
-            "example": { "error": "upstream_error", "upstream_status": 500 }
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            },
+            "example": {
+              "error": "upstream_error",
+              "upstream_status": 500
+            }
           }
         }
       },
@@ -531,8 +831,12 @@
         "description": "O recurso informado nao existe para a sua conta (id inexistente ou de outra conta).",
         "content": {
           "application/json": {
-            "schema": { "$ref": "#/components/schemas/ErrorEnvelope" },
-            "example": { "error": "not_found" }
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            },
+            "example": {
+              "error": "not_found"
+            }
           }
         }
       },
@@ -540,11 +844,31 @@
         "description": "O perfil informado nao existe.",
         "content": {
           "application/json": {
-            "schema": { "$ref": "#/components/schemas/ErrorEnvelope" },
-            "example": { "error": "not_found" }
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            },
+            "example": {
+              "error": "not_found"
+            }
           }
         }
       }
     }
-  }
+  },
+  "x-tagGroups": [
+    {
+      "name": "Mensagens e conversas",
+      "tags": [
+        "Mensagens",
+        "Convites",
+        "Conversas"
+      ]
+    },
+    {
+      "name": "Sua conta",
+      "tags": [
+        "Conta"
+      ]
+    }
+  ]
 }
