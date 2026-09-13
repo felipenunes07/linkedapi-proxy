@@ -8,7 +8,7 @@
   "servers": [
     {
       "url": "https://api.playbooklab.com.br",
-      "description": "Producao (workers.dev)"
+      "description": "Producao"
     },
     {
       "url": "http://localhost:8787",
