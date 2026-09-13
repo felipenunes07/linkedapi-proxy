@@ -12,7 +12,7 @@ import { hashApiKey } from '../src/lib/hash.ts';
 import { loadEnv, loadEnvOptional, fail } from './env.ts';
 
 const TTL_MS = 72 * 60 * 60 * 1000;
-const DEFAULT_PORTAL_URL = 'https://landing-api-linkedin.vercel.app/painel';
+const DEFAULT_PORTAL_URL = 'https://app.playbooklab.com.br/painel';
 
 interface TenantRow {
   id: string;

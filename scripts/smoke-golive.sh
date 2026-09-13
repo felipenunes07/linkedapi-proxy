@@ -10,7 +10,7 @@ set -uo pipefail
 BASE="${1:-https://linkedapi-proxy.victor-58a.workers.dev}"
 # Landing e painel na Vercel (F2.26). O Pages antigo so redireciona, mas segue
 # no CORS por 30 dias (docs/pendencias.md).
-ORIGEM="https://landing-api-linkedin.vercel.app"
+ORIGEM="https://app.playbooklab.com.br"
 ORIGEM_ANTIGA="https://linkedapi-site.pages.dev"
 falhas=0
 

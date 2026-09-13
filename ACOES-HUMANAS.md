@@ -44,6 +44,27 @@ npx wrangler secret delete UNIPILE_AUTH_HOST
 npm run deploy
 ```
 
+## 0b. Teste ponta a ponta de 2026-09-13 (o que ja esta provado)
+
+Rodado contra producao, sem dinheiro:
+
+- **A API que o cliente compra**: chave emitida, `GET /v1/chats` devolveu chats
+  reais do LinkedIn em ~2s pelo dominio proprio; chave invalida e ausente dao
+  401. Achado e corrigido no caminho: o cursor de paginacao deixava o cliente
+  escolher a conta (F2.36).
+- **Painel do cliente pago**: link do operador -> sessao -> status -> lista de
+  contas -> tela de conexao (a URL volta e expira em 2h) -> chave recusada sem
+  LinkedIn conectado (409, correto).
+- **Conta adicional**: token de assento -> mesmo checkout -> R$ 67 na pagina do
+  Asaas -> tenant novo JA no grupo -> aviso de pagamento simulado ->
+  assinatura ativa -> as duas contas na lista -> troca entre elas -> sessao
+  antiga revogada na troca -> `ref` de grupo alheio recusada.
+- Tudo o que o teste criou foi desfeito: sessao de pagamento cancelada no
+  Asaas, tenant de teste apagado, chave revogada, grupo desfeito.
+
+O que o teste NAO cobre, e so dinheiro de verdade cobre: pagar um Pix e um
+cartao e ver o webhook REAL do Asaas ativar a conta.
+
 ## 1. Provar com dinheiro de verdade
 
 - **Cadastrar o site na conta Asaas.** Minha Conta > Informacoes > Site:
