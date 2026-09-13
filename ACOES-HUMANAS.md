@@ -75,18 +75,12 @@ custom domain exige zona e Worker na MESMA conta e a zona
 ~~Falta um clique~~ FEITO: a conta ganhou o subdominio `fernando-31d.workers.dev`
 e o cron da faxina voltou (`schedule: 23 * * * *` confirmado no deploy).
 
-**Ultimo passo, na conta do VICTOR:** apagar o Worker antigo. Ele nao recebe
-mais webhook nenhum (todos apontam para o dominio novo), mas continua
-publicado e com o cron da faxina rodando no MESMO banco. Dois processos
-mexendo nos mesmos checkouts abandonados nao e desenho, e sobra.
-
-```bash
-npx wrangler delete --name linkedapi-proxy   # com a conta do Victor selecionada
-```
-
-Ou pelo painel: conta do Victor > Workers & Pages > linkedapi-proxy >
-Settings > Delete. Voltar atras, se precisar, e um `npm run deploy` apontando
-o `account_id` de volta.
+~~Apagar o Worker antigo~~ FEITO em 2026-09-13: o endereco antigo responde 404
+e o novo segue verde (health, docs, painel, banco e os tres hooks). Sobra na
+conta do Victor, inofensivo, o KV `linkedapi-proxy-RATE_LIMIT`, que nao some
+junto com o Worker: da para apagar em Storage & Databases > KV. O projeto
+Pages `linkedapi-site` FICA: e o endereco antigo da landing, que so
+redireciona.
 
 Webhooks ja reapontados para o dominio novo e conferidos no ar:
 - Unipile `linkedapi-account-status` e `linkedapi-message-received` (os antigos
