@@ -86,6 +86,10 @@ const ESTILO = `
      Share, Deploy): e da plataforma deles, nao do nosso cliente. */
   .api-reference-toolbar { display: none !important; }
 
+  /* Uma busca so: a do topo. A da lateral continua existindo no DOM (e ela
+     que o botao aciona), apenas escondida. */
+  .doc-sem-busca-lateral { display: none !important; }
+
   /* Barra propria, na cor da marca. Duas faixas, como o topo de uma doc de
      API: marca + busca centralizada + links, e embaixo versao e abas. */
   .doc-barra {
@@ -112,18 +116,17 @@ const ESTILO = `
      limpo do topo. */
   .doc-busca {
     position: absolute; left: 50%; transform: translateX(-50%);
-    width: min(430px, 42vw);
-    display: flex; align-items: center; gap: 9px; height: 38px;
-    background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 9px; padding: 0 10px; cursor: pointer;
-    color: #94a3b8; font: inherit; font-size: 13.5px; text-align: left;
+    width: min(345px, 38vw);
+    display: flex; align-items: center; gap: 9px; height: 36px;
+    background: #f1f3f5; border: 0; border-radius: 999px;
+    padding: 0 14px; cursor: pointer;
+    color: #6b7280; font: inherit; font-size: 13.5px; text-align: left;
   }
-  .doc-busca:hover { background: rgba(255, 255, 255, 0.11); border-color: rgba(255, 255, 255, 0.2); }
+  .doc-busca:hover { background: #e8ebee; }
   .doc-busca span { flex: 1; }
   .doc-busca kbd {
     font-family: inherit; font-size: 10.5px; font-weight: 600; letter-spacing: 0.6px;
-    color: #94a3b8; border: 1px solid rgba(255, 255, 255, 0.16);
-    border-radius: 5px; padding: 3px 6px;
+    color: #9aa3ad; border: 0; padding: 0;
   }
   .doc-links {
     margin-left: auto; display: flex; align-items: center; gap: 24px;
@@ -132,16 +135,16 @@ const ESTILO = `
   .doc-links a { color: #e6edf3; text-decoration: none; white-space: nowrap; }
   .doc-links a:hover { color: #ffffff; }
   .doc-tema {
-    display: grid; place-items: center; width: 30px; height: 30px;
-    background: none; border: 0; border-radius: 8px; color: #94a3b8; cursor: pointer;
+    display: grid; place-items: center; width: 34px; height: 34px; flex: none;
+    background: rgba(255, 255, 255, 0.1); border: 0; border-radius: 999px;
+    color: #e6edf3; cursor: pointer;
   }
-  .doc-tema:hover { background: rgba(255, 255, 255, 0.1); color: #ffffff; }
+  .doc-tema:hover { background: rgba(255, 255, 255, 0.18); color: #ffffff; }
   .doc-tema svg { width: 17px; height: 17px; }
   .doc-abas { display: flex; align-items: center; gap: 10px; padding: 0 20px; height: 36px; }
   .doc-versao {
-    font-size: 12.5px; font-weight: 600; color: #cbd5e1;
-    border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 7px; padding: 4px 9px;
-    margin-right: 4px;
+    font-size: 13.5px; font-weight: 500; color: #cbd5e1;
+    padding: 4px 2px; margin-right: 8px;
   }
   .doc-aba {
     display: inline-flex; align-items: center; gap: 7px;
@@ -150,9 +153,9 @@ const ESTILO = `
   }
   .doc-aba:hover { color: #ffffff; }
   .doc-aba.on {
-    color: #ffffff; font-weight: 600; background: rgba(255, 255, 255, 0.07);
-    border-color: rgba(255, 255, 255, 0.14);
+    color: var(--doc-navy); font-weight: 600; background: #f1f3f5; border-color: #f1f3f5;
   }
+  .doc-aba.on:hover { color: var(--doc-navy); background: #e8ebee; }
   .doc-aba svg { width: 15px; height: 15px; flex: none; }
 
   /* Tela media: a busca sai do centro absoluto para nao colidir. */
@@ -261,15 +264,32 @@ export function docsHtml(env: Env): string {
         try { localStorage.setItem('playbook_docs_tema', escuro ? 'escuro' : 'claro'); } catch (e) {}
       });
 
-      document.getElementById('docBusca').addEventListener('click', function () {
+      function gatilhoDaBusca() {
         var botoes = document.querySelectorAll('aside button, .sidebar button');
         for (var i = 0; i < botoes.length; i++) {
-          if (/search|buscar/i.test(botoes[i].textContent || '')) {
-            botoes[i].click();
-            return;
-          }
+          if (/search|buscar/i.test(botoes[i].textContent || '')) return botoes[i];
         }
+        return null;
+      }
+
+      document.getElementById('docBusca').addEventListener('click', function () {
+        var alvo = gatilhoDaBusca();
+        if (alvo) alvo.click();
       });
+
+      // Uma busca so na tela: a de cima. A da lateral fica escondida, mas viva
+      // (e nela que o clique acima bate). O Scalar monta a lateral depois do
+      // carregamento, entao tentamos algumas vezes antes de desistir.
+      var tentativas = 0;
+      var procura = setInterval(function () {
+        var alvo = gatilhoDaBusca();
+        if (alvo && alvo.parentElement) {
+          alvo.parentElement.classList.add('doc-sem-busca-lateral');
+          clearInterval(procura);
+        } else if (++tentativas > 20) {
+          clearInterval(procura);
+        }
+      }, 250);
     </script>
   </body>
 </html>`;
