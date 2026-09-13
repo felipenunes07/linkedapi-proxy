@@ -28,7 +28,7 @@ const ALTURA_BARRA_MOBILE = 116;
 const ESTILO = `
   :root {
     --scalar-custom-header-height: ${ALTURA_BARRA}px;
-    --doc-navy: #0f2736;
+    --doc-navy: #0f2836;
     --doc-fonte: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     --doc-yellow: #dddf4c;
   }
@@ -100,7 +100,10 @@ const ESTILO = `
   .doc-barra {
     position: fixed; inset: 0 0 auto 0; z-index: 50;
     height: var(--scalar-custom-header-height);
-    background: var(--doc-navy); color: #ffffff;
+    /* Degrade do azul-marinho da marca ate o preto, nas duas faixas. E o
+       mesmo desenho da referencia: linear-gradient(rgb(15,40,54), #000). */
+    background: linear-gradient(180deg, var(--doc-navy) 0%, #000000 100%);
+    color: #ffffff;
     font-family: var(--doc-fonte);
     display: flex; flex-direction: column;
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
