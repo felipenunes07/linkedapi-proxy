@@ -1,10 +1,10 @@
 # Acoes humanas (o que SO uma pessoa pode fazer para o projeto avancar)
 
-Todo o codigo esta pronto, testado (243 testes) e revisado. Este arquivo lista
+Todo o codigo esta pronto, testado (249 testes) e revisado. Este arquivo lista
 APENAS o que precisa de mao humana. Os comandos de deploy estao em
 [docs/go-live.md](docs/go-live.md) (secoes H e I).
 
-Atualizado em 2026-09-11.
+Atualizado em 2026-09-13.
 
 Onde fica cada coisa:
 - Landing e painel: Vercel, https://landing-api-linkedin.vercel.app (deploy a
@@ -16,21 +16,33 @@ Onde fica cada coisa:
 
 ---
 
-## 0. Subir o preco novo e os assentos (F2.29)
+## 0. Preco novo e assentos: NO AR em 2026-09-13
 
-Codigo pronto; falta so aplicar:
+Feito, nada pendente aqui:
 
-1. **Migration 0011** no SQL Editor do Supabase:
-   `supabase/migrations/0011_assentos.sql` (agrupamento de assentos, rotulo da
-   conta e o novo tipo de token). Idempotente.
-2. **Deploy do Worker** (`npm run deploy`) e push da landing (o preco novo,
-   R$ 67, e o default do codigo).
-3. **Conferir se existe a var `PLAN_PRICE_BRL`** no Worker
-   (`npx wrangler secret list`). Se existir valendo 57, ela GANHA do codigo:
-   suba 67 no lugar ou apague. Sem a var, vale o default novo.
-4. Ninguem pagava ainda quando o preco mudou, entao nao ha cliente no preco
-   antigo. Para o futuro: autorizacao de Pix Automatico ja assinada vale pelo
-   valor autorizado; subir preco de quem ja paga exige nova autorizacao.
+1. ~~Migration 0011~~ aplicada no Supabase (`tenants.group_id`,
+   `connected_accounts.label` e o tipo de token `seat`, conferidos no banco).
+2. ~~Deploy do Worker~~ feito (versao `00cb07dd`): preco R$ 67, assentos
+   adicionais e a doc com a nossa marca. Smoke: `/health` ok, `/portal/seats`,
+   `/portal/seat` e `/portal/switch` respondendo 401 sem sessao (existem),
+   `/docs` com o header novo.
+3. ~~Conferir `PLAN_PRICE_BRL`~~: a var NAO existe no Worker, entao vale o
+   default do codigo (67). Se um dia ela for criada, ela ganha do codigo.
+4. ~~Push da landing~~ feito; a Vercel publicou e a pagina mostra R$ 67.
+
+Para o futuro: autorizacao de Pix Automatico ja assinada vale pelo valor
+autorizado; subir o preco de quem ja paga exige nova autorizacao.
+
+**Confirmar antes do primeiro onboarding real:** existe um secret
+`UNIPILE_AUTH_HOST` no Worker (F2.30). Com ele preenchido, o link de conexao
+sai NAQUELE dominio. Se o dominio ainda nao tem CNAME e certificado, a tela de
+conexao do cliente nao abre. Confira o valor com quem o cadastrou e, se o
+dominio nao estiver pronto, remova:
+
+```bash
+npx wrangler secret delete UNIPILE_AUTH_HOST
+npm run deploy
+```
 
 ## 1. Provar com dinheiro de verdade
 
