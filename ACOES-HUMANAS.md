@@ -4,7 +4,7 @@ Todo o codigo esta pronto, testado (249 testes) e revisado. Este arquivo lista
 APENAS o que precisa de mao humana. Os comandos de deploy estao em
 [docs/go-live.md](docs/go-live.md) (secoes H e I).
 
-Atualizado em 2026-09-13.
+Atualizado em 2026-09-14.
 
 Onde fica cada coisa:
 - Landing e painel: Vercel, https://app.playbooklab.com.br (deploy a
@@ -67,12 +67,10 @@ cartao e ver o webhook REAL do Asaas ativar a conta.
 
 ## 1. Provar com dinheiro de verdade
 
-- **Cadastrar o site na conta Asaas.** Minha Conta > Informacoes > Site:
-  `https://app.playbooklab.com.br`, e clicar em Salvar no fim do formulario.
-  Conferido pela API deles em 2026-09-13: o campo ainda volta vazio
-  (`commercialInfo.site = null`), entao a edicao nao chegou a salvar. E dado
-  cadastral; NAO e o que decide para onde o cliente volta depois de pagar
-  (isso vem do nosso backend, que ja manda para o dominio proprio).
+- ~~**Cadastrar o site na conta Asaas**~~ FEITO: conferido pela API deles em
+  2026-09-14, `commercialInfo.site` ja volta `https://app.playbooklab.com.br/`,
+  na conta FTX INSIDE SALES VENDAS DIGITAIS LTDA. (CNPJ 44.381.718/0001-40, o
+  mesmo que esta nos termos).
 - **Uma compra no Pix e uma no cartao** (R$ 67 cada), com CPF e LinkedIn da
   equipe: checkout -> pagamento -> painel -> conectar LinkedIn -> gerar chave.
   E a unica prova ponta a ponta do fluxo inteiro. No cartao, conferir no mes
@@ -148,11 +146,14 @@ Duas observacoes da tela, para decidir depois:
 
 ## 5. Opcionais
 
-- **Resend** (e-mail transacional): boas-vindas com o link do painel e o
-  "entrar pelo e-mail". Criar conta, verificar um dominio e rodar
-  `npx wrangler secret put RESEND_API_KEY` e `npx wrangler secret put EMAIL_FROM`.
-  Sem isso o acesso fica salvo no navegador de quem pagou; plano B do
-  operador: `npm run portal:link -- <tenant_id>`.
+- ~~**Resend**~~ (e-mail transacional) LIGADO em 2026-09-14: dominio
+  `playbooklab.com.br` verificado (regiao Sao Paulo), DKIM, SPF e DMARC no ar
+  e o SPF da raiz mantendo o Google Workspace junto do novo remetente. A
+  `RESEND_API_KEY` e secret; o `EMAIL_FROM` saiu do cofre e virou var no
+  `wrangler.jsonc` (`Playbook API <victor@playbooklab.com.br>`), porque ele
+  viaja no cabecalho de todo e-mail e nao e segredo. `POST /portal/login`
+  responde 200 (com e-mail desligado ele responde 503).
+  Falta so o envio real, que sai junto do primeiro pagamento de teste.
 - **Dominio proprio** quando houver nome definitivo: apontar na Vercel,
   adicionar a origem no CORS (`src/index.ts`), trocar `PORTAL_URL` no
   `wrangler.jsonc` e fazer o passo 3 acima (`auth.` da tela de conexao).

@@ -8,6 +8,7 @@ import {
 import { hashApiKey } from './hash';
 import { randomHex32 } from './random';
 import { createHostedAuthLink } from './unipile';
+import { aplicarDominioProprio } from './dominio';
 import { emailConfigured, sendEmail } from './email';
 import { DAILY_LIMITS } from './limits';
 
@@ -454,37 +455,6 @@ export async function createConnectLink(
   return typeof data.url === 'string'
     ? { url: aplicarDominioProprio(data.url, env.UNIPILE_AUTH_HOST), expiresAt }
     : null;
-}
-
-// Dominio proprio da tela de conexao (F2.30). A origem hospeda o wizard num
-// dominio dela; com um CNAME nosso apontando para la (e o certificado que eles
-// emitem), a MESMA tela responde no nosso dominio. Aqui so trocamos o host do
-// link, preservando caminho, query e fragmento (e no caminho que esta o token
-// do wizard).
-//
-// Falha ABERTA de proposito: host mal configurado mantem o link original, que
-// funciona. Derrubar a conexao de quem ja pagou para nao mostrar uma marca
-// seria o erro maior; o sinal interno avisa o operador.
-export function aplicarDominioProprio(url: string, host: string | undefined): string {
-  const alvo = (host ?? '').trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
-  if (!alvo) {
-    return url;
-  }
-  try {
-    const original = new URL(url);
-    const trocada = new URL(`https://${alvo}`);
-    // So host: um valor com caminho, usuario ou porta estranha nao entra.
-    if (trocada.host !== alvo || trocada.pathname !== '/') {
-      console.error('connect_auth_host_invalido');
-      return url;
-    }
-    original.protocol = 'https:';
-    original.host = alvo;
-    return original.toString();
-  } catch {
-    console.error('connect_auth_host_invalido');
-    return url;
-  }
 }
 
 // ---------------------------------------------------------------------------

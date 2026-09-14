@@ -17,6 +17,7 @@
 // Segredos (UNIPILE_*, SUPABASE_*) vem de .dev.vars/env e nunca sao logados.
 import { randomBytes } from 'node:crypto';
 import { hashApiKey } from '../src/lib/hash.ts';
+import { aplicarDominioProprio } from '../src/lib/dominio.ts';
 import { loadEnv, loadEnvOptional, fail } from './env.ts';
 
 // Validade do link e do token. Curta de proposito: o link e para ser usado na
@@ -209,7 +210,13 @@ async function generateLink(
     body.failure_redirect_url = failureUrl;
   }
 
-  const url = await requestHostedAuthLink(body);
+  // O mesmo dominio proprio que o painel usa (F2.30): o link que o operador
+  // manda na mao nao pode mostrar a marca da origem justo para o cliente que
+  // ele esta ajudando. Sem UNIPILE_AUTH_HOST no ambiente, sai o link original.
+  const url = aplicarDominioProprio(
+    await requestHostedAuthLink(body),
+    loadEnvOptional('UNIPILE_AUTH_HOST'),
+  );
 
   console.log('');
   console.log(
