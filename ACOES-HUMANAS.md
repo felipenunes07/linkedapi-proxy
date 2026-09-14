@@ -120,42 +120,24 @@ Webhooks ja reapontados para o dominio novo e conferidos no ar:
 - **Nome definitivo** do produto (o atual e provisorio). Ao trocar, seguir a
   lista de arquivos no README da landing.
 
-## 3. Tirar a marca da origem da tela de conexao (F2.30)
+## 3. Tela de conexao no nosso dominio: FEITO em 2026-09-14 (F2.30)
 
-O codigo ja esta pronto: com a var `UNIPILE_AUTH_HOST` preenchida, o link que
-o painel abre sai no NOSSO dominio. Sem ela, sai no dominio da origem (e
-funciona igual). O que falta e so o que depende de voces:
+O suporte da origem emitiu o certificado e o `UNIPILE_AUTH_HOST` foi ligado no
+Worker. Conferido no ar:
 
-1. **Registrar o dominio proprio** (ainda nao existe; hoje a landing e
-   `landing-api-linkedin.vercel.app`, e em dominio da Vercel nao da para criar
-   o CNAME abaixo). Este e o unico bloqueio real.
-2. **Criar o CNAME** no painel do registrador:
-   - Nome: `auth` (vira `auth.seudominio.com.br`)
-   - Tipo: `CNAME`
-   - Valor/alvo: `account.unipile.com.` (com o ponto no fim)
-   - A propagacao leva ate 24h. Confira em whatsmydns.net antes do passo 3.
-3. **Abrir chamado na Unipile** (chat do dashboard ou suporte) pedindo o
-   certificado do dominio proprio da hosted auth, passando a URL completa
-   (`https://auth.seudominio.com.br`). Eles emitem o SSL e finalizam do lado
-   deles. Exige assinatura ativa, que ja temos.
-4. **Ligar no Worker**, com o host puro, sem `https://` e sem barra:
-   ```bash
-   npx wrangler secret put UNIPILE_AUTH_HOST
-   # cole: auth.seudominio.com.br
-   npm run deploy
-   ```
-5. **Conferir**: abrir o painel, clicar em conectar e olhar a barra de
-   endereco. Tem que aparecer `auth.seudominio.com.br`. Se algo estiver errado
-   na var, o link volta a sair no dominio da origem (falha aberta, de
-   proposito: ninguem fica sem conectar) e o log marca
-   `connect_auth_host_invalido`.
+- certificado `CN=auth.playbooklab.com.br` (Let's Encrypt), handshake 200;
+- `POST /portal/connect` devolve link em `auth.playbooklab.com.br`;
+- o link abre a tela de conexao de verdade, sem aviso de certificado.
 
-Observacoes:
-- O tela em si continua sendo a da origem, so que servida no nosso dominio. A
-  Unipile desaconselha embutir em iframe (quebra o captcha do LinkedIn), entao
-  o CNAME e o caminho suportado.
-- Enquanto o dominio nao existir, o cliente ve o dominio da origem nessa tela.
-  O resto do produto (landing, painel, API, docs) nunca cita a origem.
+A partir daqui o cliente nao ve o nome da origem em nenhuma tela do produto.
+
+Duas observacoes da tela, para decidir depois:
+
+1. Ela oferece dois metodos, "Credentials" e "Cookies". O segundo pede o
+   cookie de sessao do LinkedIn, coisa de gente tecnica; da para deixar so o
+   primeiro com `disabled_options: ['cookie_auth']` no link.
+2. Ela abriu em ingles no navegador do teste. Se nao seguir o idioma de quem
+   abre, vale procurar o parametro de idioma antes do primeiro cliente.
 
 ## 4. Victor
 
