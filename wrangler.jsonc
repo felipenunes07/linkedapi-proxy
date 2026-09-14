@@ -37,6 +37,11 @@
     "ENVIRONMENT": "production",
     // Pagina do painel do cliente na landing (F2.20), hospedada na Vercel
     // (F2.26), no dominio proprio desde 2026-09-13 (F2.33).
-    "PORTAL_URL": "https://app.playbooklab.com.br/painel"
+    "PORTAL_URL": "https://app.playbooklab.com.br/painel",
+    // Remetente dos e-mails transacionais (F2.20). NAO e segredo: vai no
+    // cabecalho de todo e-mail que sai. So a RESEND_API_KEY e secret.
+    // O endereco precisa ser do dominio verificado no Resend, e e para ele
+    // que volta a resposta de quem responde em vez de clicar no link.
+    "EMAIL_FROM": "Playbook API <victor@playbooklab.com.br>"
   }
 }
