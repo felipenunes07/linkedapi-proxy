@@ -18,7 +18,11 @@ import { checkout } from './routes/checkout';
 import { selfservice } from './routes/selfservice';
 import { admin } from './routes/admin';
 import { portal } from './routes/portal';
-import { limparCheckoutsAbandonados, pausarAcessosVencidos } from './lib/limpeza';
+import {
+  conciliarContasSumidas,
+  limparCheckoutsAbandonados,
+  pausarAcessosVencidos,
+} from './lib/limpeza';
 
 // Data plane: o proxy. Pipeline por request:
 //   autenticar chave -> resolver tenant + account_id (server-side)
@@ -294,6 +298,13 @@ export default Object.assign(app, {
     ctx.waitUntil(
       pausarAcessosVencidos(env).catch((err: unknown) => {
         console.error(`acessos_vencidos_falhou: ${err instanceof Error ? err.message : 'erro'}`);
+      }),
+    );
+    // Conta que sumiu na origem: o banco ainda diz "ativa" e a chave do
+    // cliente falha calada (F2.40).
+    ctx.waitUntil(
+      conciliarContasSumidas(env).catch((err: unknown) => {
+        console.error(`conciliacao_falhou: ${err instanceof Error ? err.message : 'erro'}`);
       }),
     );
   },

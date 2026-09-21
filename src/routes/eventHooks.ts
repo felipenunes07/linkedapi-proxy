@@ -162,7 +162,7 @@ async function buildReconnectLink(
 }
 
 // Status vindos da origem que significam "sessao caiu" / "sessao ok".
-const DOWN_STATUSES = new Set(['CREDENTIALS', 'DISCONNECTED', 'ERROR', 'STOPPED']);
+const DOWN_STATUSES = new Set(['CREDENTIALS', 'DISCONNECTED', 'ERROR', 'STOPPED', 'DELETED']);
 const UP_STATUSES = new Set(['OK', 'CREATION_SUCCESS', 'RECONNECTED', 'SYNC_SUCCESS']);
 
 export const eventHooks = new Hono<{ Bindings: Env; Variables: Variables }>();

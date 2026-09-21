@@ -447,6 +447,54 @@ describe('POST /portal/connect', () => {
     expect(db.connect_tokens![0]).toMatchObject({ tenant_id: 'tA', purpose: 'reconnect' });
   });
 
+  it('F2.40: conta apagada na origem nao vira beco sem saida, sai conexao nova', async () => {
+    db.connected_accounts!.push({
+      id: 'ca-a',
+      tenant_id: 'tA',
+      unipile_account_id: 'ua-sumida',
+      provider: 'linkedin',
+      status: 'disconnected',
+      created_at: '2026-09-03T00:00:00.000Z',
+    });
+    // Reconectar uma conta que nao existe mais e recusado pela origem.
+    vi.mocked(createHostedAuthLink).mockImplementationOnce(
+      async () => new Response('{}', { status: 404 }),
+    );
+
+    const res = await req('/portal/connect', { method: 'POST', token: TOKEN_A });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { data: { url: string; reconnect: boolean } };
+    expect(body.data.url).toContain('wizard.example');
+
+    const tentativas = vi.mocked(createHostedAuthLink).mock.calls;
+    expect(tentativas).toHaveLength(2);
+    expect(tentativas[0]![1]).toMatchObject({ type: 'reconnect' });
+    expect(tentativas[1]![1]).toMatchObject({ type: 'create' });
+    expect(tentativas[1]![1]).not.toHaveProperty('reconnect_account');
+  });
+
+  it('F2.40: a saida de emergencia ainda respeita o teto de seats', async () => {
+    db.connected_accounts!.push({
+      id: 'ca-a',
+      tenant_id: 'tA',
+      unipile_account_id: 'ua-sumida',
+      provider: 'linkedin',
+      status: 'disconnected',
+      created_at: '2026-09-03T00:00:00.000Z',
+    });
+    vi.mocked(createHostedAuthLink).mockImplementationOnce(
+      async () => new Response('{}', { status: 404 }),
+    );
+
+    const res = await req(
+      '/portal/connect',
+      { method: 'POST', token: TOKEN_A },
+      baseEnv({ SEAT_CAP: '1' }),
+    );
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: 'sold_out' });
+  });
+
   it('LinkedIn ja conectado: 409', async () => {
     const res = await req('/portal/connect', { method: 'POST', token: TOKEN_B });
     expect(res.status).toBe(409);

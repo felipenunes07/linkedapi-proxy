@@ -253,17 +253,19 @@ portal.post('/connect', async (c) => {
     return c.json({ error: 'rate_limited' }, 429);
   }
 
-  if (linkedin.state === 'none') {
-    // Conta nova ocupa seat da conta-mestra. O proprio tenant (assinatura
-    // ativa) ja entra na contagem, entao so estoura se PASSAR do teto.
+  // Conta nova ocupa seat da conta-mestra. O proprio tenant (assinatura
+  // ativa) ja entra na contagem, entao so estoura se PASSAR do teto.
+  async function seatDisponivel(): Promise<boolean> {
     const seatCap = Number(c.env.SEAT_CAP ?? DEFAULT_SEAT_CAP);
-    if (Number.isFinite(seatCap) && (await seatsInUse(c.env)) > seatCap) {
-      console.error('portal_connect_sold_out');
-      return c.json({ error: 'sold_out' }, 503);
-    }
+    return !Number.isFinite(seatCap) || (await seatsInUse(c.env)) <= seatCap;
   }
 
-  const link =
+  if (linkedin.state === 'none' && !(await seatDisponivel())) {
+    console.error('portal_connect_sold_out');
+    return c.json({ error: 'sold_out' }, 503);
+  }
+
+  let link =
     linkedin.state === 'disconnected'
       ? await createConnectLink(c.env, s.tenantId, 'reconnect', linkedin.accountId, {
           voltarAoPainel: true,
@@ -271,6 +273,20 @@ portal.post('/connect', async (c) => {
       : await createConnectLink(c.env, s.tenantId, 'create', undefined, {
           voltarAoPainel: true,
         });
+
+  // Reconexao so existe enquanto a conta existe na origem. Se ela foi apagada
+  // la (F2.40), o link de reconexao falha e o cliente ficaria preso num
+  // 503 sem saida, pagando. Cai para uma conexao nova, que resolve sozinho.
+  if (!link && linkedin.state === 'disconnected') {
+    if (!(await seatDisponivel())) {
+      console.error('portal_connect_sold_out');
+      return c.json({ error: 'sold_out' }, 503);
+    }
+    console.error('portal_connect_reconexao_impossivel');
+    link = await createConnectLink(c.env, s.tenantId, 'create', undefined, {
+      voltarAoPainel: true,
+    });
+  }
   if (!link) {
     console.error('portal_connect_link_failed');
     return c.json({ error: 'connect_unavailable' }, 503);

@@ -1,5 +1,6 @@
 import type { Env } from '../types';
 import { supabaseSelect, supabaseDelete, supabaseUpdate } from './supabase';
+import { listAccounts } from './unipile';
 import {
   cancelCardCheckout,
   cancelPixAutomaticAuthorization,
@@ -233,4 +234,92 @@ export async function pausarAcessosVencidos(env: Env): Promise<number> {
     }
   }
   return pausados;
+}
+
+// ---------------------------------------------------------------------------
+// Contas que sumiram na origem (F2.40). Quando uma conta deixa de existir la,
+// nao chega webhook nenhum: o nosso banco continua dizendo "ativa", o painel
+// mostra tudo verde e a chave do cliente falha a cada chamada, sem explicacao
+// em lugar nenhum. Achado em 2026-09-21, com duas contas nesse estado.
+//
+// De hora em hora comparamos as nossas contas ativas com a lista que a origem
+// reconhece e marcamos como desconectada quem sumiu. E o mesmo estado de quem
+// teve a sessao derrubada, que o painel ja sabe explicar e oferecer reconexao.
+//
+// Fail-safe: qualquer duvida sobre a lista da origem (erro, lista vazia ou
+// paginada) NAO marca nada. Marcar demais derrubaria cliente pagante, que e
+// bem pior do que demorar uma hora a mais para perceber.
+// ---------------------------------------------------------------------------
+
+interface ContaAtivaRow {
+  id: string;
+  tenant_id: string;
+  unipile_account_id: string;
+}
+
+interface ListaDeContas {
+  items?: Array<{ id?: unknown }>;
+  cursor?: unknown;
+}
+
+export async function conciliarContasSumidas(env: Env): Promise<number> {
+  let corpo: ListaDeContas;
+  try {
+    const res = await listAccounts(env);
+    if (!res.ok) {
+      console.error(`conciliacao_origem_indisponivel:${res.status}`);
+      return 0;
+    }
+    corpo = (await res.json()) as ListaDeContas;
+  } catch {
+    console.error('conciliacao_origem_indisponivel:rede');
+    return 0;
+  }
+
+  const itens = Array.isArray(corpo.items) ? corpo.items : [];
+  if (itens.length === 0) {
+    // Lista vazia e indistinguivel de resposta quebrada, e concluir dela que
+    // TODAS as contas sumiram seria o pior erro possivel aqui.
+    console.error('conciliacao_lista_vazia');
+    return 0;
+  }
+  if (corpo.cursor) {
+    // Paginada: a conta que falta ver poderia ser justamente a do cliente.
+    console.error('conciliacao_lista_paginada');
+    return 0;
+  }
+  const naOrigem = new Set(
+    itens.map((i) => i.id).filter((id): id is string => typeof id === 'string'),
+  );
+
+  const nossas = await supabaseSelect<ContaAtivaRow>(env, 'connected_accounts', {
+    status: 'eq.active',
+    select: 'id,tenant_id,unipile_account_id',
+    limit: '200',
+  });
+
+  let marcadas = 0;
+  for (const conta of nossas) {
+    if (naOrigem.has(conta.unipile_account_id)) {
+      continue;
+    }
+    try {
+      const alteradas = await supabaseUpdate<{ id: string }>(
+        env,
+        'connected_accounts',
+        { id: `eq.${conta.id}`, status: 'eq.active' },
+        { status: 'disconnected' },
+      );
+      if (alteradas.length > 0) {
+        marcadas += 1;
+        // So o uuid do tenant (nosso), como no resto da faxina.
+        console.log(`conta_sumiu_na_origem: ${conta.tenant_id}`);
+      }
+    } catch (err) {
+      console.error(
+        `conciliacao_erro: ${conta.tenant_id} ${err instanceof Error ? err.message : 'erro'}`,
+      );
+    }
+  }
+  return marcadas;
 }
