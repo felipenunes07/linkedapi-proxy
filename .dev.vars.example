@@ -26,6 +26,7 @@ PUBLIC_BASE_URL="https://cole-aqui-a-url-publica-do-worker"
 # npm run webhook:register; suba tambem via wrangler secret put em producao):
 # ACCOUNT_STATUS_HOOK_SECRET=""
 # MESSAGE_HOOK_SECRET=""
+# USERS_HOOK_SECRET=""
 
 # Billing Asaas: chave da API (script billing:subscribe) e token que o Asaas
 # devolve no header asaas-access-token do webhook (configurar no painel deles).

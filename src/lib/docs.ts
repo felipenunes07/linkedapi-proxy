@@ -17,7 +17,7 @@ const SCALAR_SRI =
   'sha384-NAMzfHXRsxRYhcKmRnZGVLvlBeXTWtpYd0jWgeZ7fk89X95GIJBK1H4bUwkP4IZJ';
 
 const PAINEL_PADRAO = 'https://app.playbooklab.com.br/painel';
-const SUPORTE = 'victor@playbooklab.com.br';
+const SUPORTE = 'contato@playbooklab.com.br';
 
 // Altura da nossa barra (marca + abas). O Scalar tem suporte NATIVO a header
 // proprio: com esta variavel, a barra lateral e o conteudo dele ja nascem

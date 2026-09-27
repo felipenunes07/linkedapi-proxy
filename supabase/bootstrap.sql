@@ -1,4 +1,4 @@
--- bootstrap.sql: as migrations 0001..0010 concatenadas para colar UMA vez no
+-- bootstrap.sql: as migrations 0001..0014 concatenadas para colar UMA vez no
 -- SQL Editor de um projeto Supabase novo/restaurado. Fonte da verdade sao os
 -- arquivos em supabase/migrations/; se eles mudarem, regenere este arquivo
 -- (concatene as migrations na ordem, com este cabecalho).
@@ -436,3 +436,98 @@ alter table billing_subscriptions add column if not exists access_until timestam
 create index if not exists billing_subscriptions_access_until_idx
   on billing_subscriptions(access_until)
   where access_until is not null;
+
+-- Migration 0013. Uso persistente das acoes novas (F2.41).
+--
+-- A API passou de 3 para todos os endpoints de LinkedIn, e cada familia de
+-- chamada que toca o LinkedIn ao vivo ganhou o seu limite diario
+-- (src/lib/limits.ts). O historico em usage_daily so aceitava 'messages' e
+-- 'invitations': sem esta migration o incremento das acoes novas falha (em
+-- silencio, e best-effort) e o painel mostra zero.
+--
+-- Duas mudancas:
+--   1. o CHECK de action passa a aceitar as acoes novas;
+--   2. increment_usage ganha uma sobrecarga com p_count, porque o limite de
+--      busca e medido em RESULTADOS devolvidos, nao em chamadas. A assinatura
+--      antiga (3 argumentos) continua existindo e atendendo o de sempre.
+
+alter table usage_daily drop constraint if exists usage_daily_action_check;
+alter table usage_daily
+  add constraint usage_daily_action_check
+  check (action in (
+    'messages',
+    'invitations',
+    'profile_views',
+    'search_results',
+    'network_reads',
+    'content_reads',
+    'invitation_responses',
+    'reactions',
+    'comments',
+    'posts',
+    'chat_actions'
+  ));
+
+create or replace function increment_usage(
+  p_tenant_id uuid,
+  p_action text,
+  p_day date,
+  p_count integer
+) returns void
+language sql
+security definer
+set search_path = public
+as $$
+  insert into usage_daily (tenant_id, action, day, count)
+  values (p_tenant_id, p_action, p_day, greatest(p_count, 0))
+  on conflict (tenant_id, action, day)
+  do update set count = usage_daily.count + greatest(p_count, 0);
+$$;
+
+revoke execute on function increment_usage(uuid, text, date, integer)
+  from public, anon, authenticated;
+
+-- Migration 0014. Varios webhooks por conta, cada um com os seus eventos
+-- (F2.43).
+--
+-- Ate aqui o tenant tinha UM endpoint (tenants.webhook_url/webhook_secret) que
+-- recebia todo evento. Agora, como no dashboard da origem, o cliente cria
+-- quantos webhooks quiser (teto no Worker), cada um com nome, URL, secret
+-- proprio e a lista de eventos que o dispara.
+--
+-- A tabela propria tambem fecha a pendencia antiga: o secret sai de `tenants`,
+-- onde qualquer select:* futuro o vazaria. Continua sendo o unico segredo
+-- recuperavel do banco (decisao F2.5): precisa dele para assinar cada evento.
+--
+-- O endpoint que ja existia vira o primeiro webhook da conta, com TODOS os
+-- eventos de antes (mensagem nova, conexao caiu, conexao voltou), para nada
+-- mudar para quem ja integrou. As colunas antigas ficam ate uma migration de
+-- limpeza: o Worker novo nao le mais nenhuma delas.
+
+create table if not exists client_webhooks (
+  id          uuid primary key default gen_random_uuid(),
+  tenant_id   uuid not null references tenants(id) on delete cascade,
+  name        text not null check (char_length(name) between 1 and 60),
+  url         text not null check (url like 'https://%' and char_length(url) <= 500),
+  secret      text not null,
+  events      text[] not null check (cardinality(events) > 0),
+  created_at  timestamptz not null default now()
+);
+create index if not exists client_webhooks_tenant_idx on client_webhooks(tenant_id);
+-- Entrega: "webhooks deste tenant que assinam este evento" (events @> '{x}').
+create index if not exists client_webhooks_events_idx on client_webhooks using gin (events);
+
+alter table client_webhooks enable row level security;
+revoke all on client_webhooks from anon, authenticated;
+
+insert into client_webhooks (tenant_id, name, url, secret, events)
+select
+  t.id,
+  'Webhook principal',
+  t.webhook_url,
+  t.webhook_secret,
+  array['message.received', 'account.disconnected', 'account.reconnected']
+from tenants t
+where t.webhook_url is not null
+  and t.webhook_secret is not null
+  and not exists (select 1 from client_webhooks w where w.tenant_id = t.id);

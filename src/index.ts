@@ -1,8 +1,8 @@
 import { Hono } from 'hono';
-import type { MiddlewareHandler } from 'hono';
+import type { Context, MiddlewareHandler } from 'hono';
 import type { Env, Variables } from './types';
 import { authMiddleware } from './middleware/auth';
-import { rateLimit, recordUsage, persistUsage } from './middleware/rateLimit';
+import { rateLimit, recordUsage, persistUsage, tetoDeTentativas } from './middleware/rateLimit';
 import { sendMessage, sendInvitation, listChats } from './lib/unipile';
 import {
   sanitizeMessageSent,
@@ -10,6 +10,9 @@ import {
   sanitizeChatList,
 } from './lib/sanitize';
 import { cursorParaOrigem } from './lib/cursor';
+import { motivoDaOrigem } from './lib/erros';
+import { idValido, lerBooleano, lerData, lerEntrada } from './lib/entrada';
+import { linkedin, TETO_LEITURAS_CAIXA } from './routes/linkedin';
 import openapi from '../openapi.json';
 import { docsHtml } from './lib/docs';
 import { connectHooks } from './routes/connect';
@@ -18,6 +21,8 @@ import { checkout } from './routes/checkout';
 import { selfservice } from './routes/selfservice';
 import { admin } from './routes/admin';
 import { portal } from './routes/portal';
+import { contas } from './routes/contas';
+import { comContaSelecionavel } from './lib/openapiContas';
 import {
   conciliarContasSumidas,
   limparCheckoutsAbandonados,
@@ -28,7 +33,9 @@ import {
 //   autenticar chave -> resolver tenant + account_id (server-side)
 //   -> rate limit -> injetar master token + DSN + account_id
 //   -> rotear para a Unipile -> registrar uso -> responder.
-// Regras invioláveis em CLAUDE.md. Nao aceitar account_id do request.
+// Regras invioláveis em CLAUDE.md. Nao aceitar o account_id da origem no
+// request: o cliente so escolhe entre as contas do proprio grupo pelo NOSSO
+// account_id (acc_..., F2.42), conferido no authMiddleware.
 
 const app = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -51,7 +58,10 @@ app.get('/health', (c) => c.json({ ok: true }));
 // Unipile/DSN/account_id (regra de ouro do Marco 5).
 //   GET /openapi.json -> a spec crua (Scalar consome daqui)
 //   GET /docs         -> HTML do Scalar apontando para /openapi.json
-app.get('/openapi.json', (c) => c.json(openapi));
+// O `account_id` (F2.42) entra em toda operacao do /v1 na hora de servir, e
+// nao a mao no arquivo: rota nova ganha o campo sem ninguem lembrar.
+const spec = comContaSelecionavel(openapi);
+app.get('/openapi.json', (c) => c.json(spec));
 app.get('/docs', (c) => c.html(docsHtml(c.env)));
 
 // Callback da auto-conexao (Marco 4). Rota publica SEM X-API-KEY: a seguranca
@@ -137,28 +147,64 @@ const MESSAGES_NOT_FOUND_UPSTREAM = new Set([403, 404]);
 v1.use('/messages', rateLimit('messages'));
 v1.use('/invitations', rateLimit('invitations'));
 
-// POST /v1/messages: enviar mensagem em chat existente.
+// Corpo de erro 502 dos 3 endpoints da V1: status + reason (slug do tipo de
+// erro do LinkedIn, F2.41). O corpo cru da origem continua sem sair.
+async function erroUpstream(res: Response) {
+  const reason = await motivoDaOrigem(res);
+  return reason
+    ? { error: 'upstream_error', upstream_status: res.status, reason }
+    : { error: 'upstream_error', upstream_status: res.status };
+}
+
+const MAX_TEXTO_MENSAGEM = 8000;
+
+// Corpo 2xx que nao e JSON nao pode cair no onError: a mensagem de erro do
+// parser carrega um trecho do corpo da origem, que iria para o log.
+async function jsonOuVazio(res: Response): Promise<unknown> {
+  try {
+    return await res.json();
+  } catch {
+    return {};
+  }
+}
+
+// POST /v1/messages (chat_id no corpo) e POST /v1/chats/{chat_id}/messages
+// (chat_id no path): enviar mensagem em chat existente. JSON, ou
+// multipart/form-data com ate 5 arquivos no campo `attachments` (F2.41).
 // account_id NUNCA vem do corpo: usamos so o do tenant resolvido no servidor.
-v1.post('/messages', async (c) => {
+async function enviarMensagem(
+  c: Context<{ Bindings: Env; Variables: Variables }>,
+  chatIdDaRota?: string,
+) {
   const tenant = c.get('tenant');
 
-  let body: unknown;
-  try {
-    body = await c.req.json();
-  } catch {
-    return c.json({ error: 'invalid_json' }, 400);
-  }
+  const entrada = await lerEntrada(c);
+  if (entrada instanceof Response) return entrada;
+  const { campos, arquivos } = entrada;
 
-  const { chat_id, text } = (body ?? {}) as Record<string, unknown>;
+  const chat_id = chatIdDaRota ?? campos.chat_id;
   if (typeof chat_id !== 'string' || chat_id.length === 0) {
     return c.json({ error: 'missing_chat_id' }, 400);
   }
-  if (typeof text !== 'string' || text.length === 0) {
+  // `..` como chat_id viraria outra rota da origem (o fetch normaliza
+  // segmentos de ponto), e espaco/controle nao e id de ninguem.
+  if (!idValido(chat_id)) {
+    return c.json({ error: 'invalid_chat_id' }, 400);
+  }
+  const text = campos.text;
+  if (text === undefined && arquivos.length > 0) {
+    // So anexo: vale sem texto.
+  } else if (typeof text !== 'string' || text.length === 0) {
     return c.json({ error: 'missing_text' }, 400);
+  } else if (text.length > MAX_TEXTO_MENSAGEM) {
+    return c.json({ error: 'invalid_text' }, 400);
   }
 
   // Um account_id no corpo e ignorado de proposito (regra de isolamento).
-  const res = await sendMessage(c.env, chat_id, text, tenant.unipileAccountId);
+  const res =
+    arquivos.length > 0
+      ? await sendMessage(c.env, chat_id, typeof text === 'string' ? text : '', tenant.unipileAccountId, arquivos)
+      : await sendMessage(c.env, chat_id, text as string, tenant.unipileAccountId);
 
   if (!res.ok) {
     // Recurso inexistente OU de outra conta: 404 unico, sem detalhe (F2.13).
@@ -173,7 +219,7 @@ v1.post('/messages', async (c) => {
     }
     // Normaliza o erro. Nao repassa corpo/detail cru da Unipile (pode carregar
     // DSN/host/account_id da conta-mestra). So o status upstream, que e inocuo.
-    return c.json({ error: 'upstream_error', upstream_status: res.status }, 502);
+    return c.json(await erroUpstream(res), 502);
   }
 
   // Escrita aceita: conta a cota so agora (nao penaliza 400/404/502).
@@ -182,9 +228,14 @@ v1.post('/messages', async (c) => {
 
   // Whitelist: so os campos da nossa API. O corpo cru da Unipile carrega
   // account_id e metadados internos que nao saem daqui (white-label).
-  const data: unknown = await res.json();
+  const data = await jsonOuVazio(res);
   return c.json({ ok: true, data: sanitizeMessageSent(data) });
-});
+}
+
+v1.post('/messages', (c) => enviarMensagem(c));
+v1.post('/chats/:chat_id/messages', rateLimit('messages'), (c) =>
+  enviarMensagem(c, c.req.param('chat_id')),
+);
 
 // POST /v1/invitations: enviar convite de conexao.
 // account_id NUNCA vem do corpo: usamos so o do tenant resolvido no servidor.
@@ -227,9 +278,9 @@ v1.post('/invitations', async (c) => {
       );
       return c.json({ error: 'not_found' }, 404);
     }
-    // So o status upstream, nunca o corpo cru da Unipile (pode carregar
-    // DSN/host/account_id da conta-mestra). Mesma politica de /messages.
-    return c.json({ error: 'upstream_error', upstream_status: res.status }, 502);
+    // So o status upstream (+ reason), nunca o corpo cru da Unipile (pode
+    // carregar DSN/host/account_id da conta-mestra). Mesma politica de /messages.
+    return c.json(await erroUpstream(res), 502);
   }
 
   // Convite aceito: conta a cota so agora (nao penaliza 400/502).
@@ -237,13 +288,14 @@ v1.post('/invitations', async (c) => {
   persistUsage(c, tenant.tenantId, 'invitations');
 
   // Whitelist: so os campos da nossa API (white-label, mesma politica de /messages).
-  const data: unknown = await res.json();
+  const data = await jsonOuVazio(res);
   return c.json({ ok: true, data: sanitizeInvitationSent(data) });
 });
 
 // GET /v1/chats: listar chats do tenant (para obter chat_id). Leitura, sem rate
 // limit. O filtro por account_id e server-side: o tenant so ve os proprios chats.
-v1.get('/chats', async (c) => {
+// Teto de abuso da caixa de entrada (revisao F2.41): sem cota, mas com corte.
+v1.get('/chats', tetoDeTentativas('inbox_reads', TETO_LEITURAS_CAIXA), async (c) => {
   const tenant = c.get('tenant');
 
   // O cursor da origem carrega o account_id DENTRO dele, e a origem obedece a
@@ -261,19 +313,30 @@ v1.get('/chats', async (c) => {
     cursor = reescrito;
   }
 
-  // Repassamos so paginacao. account_id NUNCA vem do request.
+  // Filtros opcionais (F2.41): so nao lidas / so lidas, e periodo.
+  const unread = lerBooleano(c.req.query('unread'));
+  if (unread === null) return c.json({ error: 'invalid_unread' }, 400);
+  const before = lerData(c, 'before');
+  if (before === null) return c.json({ error: 'invalid_before' }, 400);
+  const after = lerData(c, 'after');
+  if (after === null) return c.json({ error: 'invalid_after' }, 400);
+
+  // Repassamos so paginacao e filtros. account_id NUNCA vem do request.
   const res = await listChats(c.env, tenant.unipileAccountId, {
     limit: c.req.query('limit'),
     cursor,
+    unread: unread === undefined ? undefined : String(unread),
+    before,
+    after,
   });
 
   if (!res.ok) {
-    return c.json({ error: 'upstream_error', upstream_status: res.status }, 502);
+    return c.json(await erroUpstream(res), 502);
   }
 
   // Whitelist por item: o objeto de chat da Unipile carrega o account_id da
   // conta-mestra; aqui so passam os campos de ChatSummary (white-label).
-  const data: unknown = await res.json();
+  const data = await jsonOuVazio(res);
   return c.json({ ok: true, data: sanitizeChatList(data) });
 });
 
@@ -281,6 +344,13 @@ v1.get('/chats', async (c) => {
 // ou seja, atras do mesmo authMiddleware das demais rotas.
 v1.route('/', selfservice);
 
+// Todos os demais endpoints de LinkedIn (F2.41): perfis, empresas, busca,
+// rede, convites, conversas, mensagens e posts. Mesmo authMiddleware.
+v1.route('/', linkedin);
+
+// Contas que a chave alcanca (F2.42). Antes do /v1 de proposito: tem auth
+// propria (so a chave), para responder mesmo com a conta da chave caida.
+app.route('/v1/accounts', contas);
 app.route('/v1', v1);
 
 // Cron do Worker (wrangler.jsonc, "triggers"): faxina de checkouts abandonados.

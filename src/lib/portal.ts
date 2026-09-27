@@ -10,7 +10,7 @@ import { randomHex32 } from './random';
 import { createHostedAuthLink } from './unipile';
 import { aplicarDominioProprio } from './dominio';
 import { emailConfigured, sendEmail } from './email';
-import { DAILY_LIMITS } from './limits';
+import { effectiveLimits } from './limits';
 
 // Painel do cliente (F2.20): credenciais do painel, link do wizard de conexao,
 // contagem de seats e os e-mails de acesso. As rotas moram em
@@ -347,10 +347,7 @@ export async function resolvePortalToken(
       tenantName: tenant.name,
       contactEmail: tenant.contact_email ?? null,
       tokenHash,
-      limits: {
-        messages: tenant.daily_message_limit ?? DAILY_LIMITS.messages,
-        invitations: tenant.daily_invitation_limit ?? DAILY_LIMITS.invitations,
-      },
+      limits: effectiveLimits(tenant),
     },
   };
 }

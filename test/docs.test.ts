@@ -17,8 +17,10 @@ const env = {
 } as Env;
 
 // Termos que NAO podem aparecer na superficie publica (case-insensitive).
-// `account_id` inclui a raiz do que o cliente jamais deve pensar em mandar.
-const FORBIDDEN = ['unipile', 'dsn', 'master', 'account_id', 'service_role'];
+// `account_id` saiu da lista em F2.42: agora e o NOSSO id de conta (acc_...),
+// documentado de proposito. O id da origem continua sem aparecer (o teste de
+// formato abaixo garante que o exemplo e o nosso).
+const FORBIDDEN = ['unipile', 'dsn', 'master', 'service_role'];
 
 describe('GET /openapi.json', () => {
   it('responde 200 sem auth e entrega a spec', async () => {
@@ -47,6 +49,31 @@ describe('GET /openapi.json', () => {
     expect(spec.paths['/v1/invitations']).toBeTruthy();
     expect(spec.paths['/v1/chats']).toBeTruthy();
     expect(spec.components.securitySchemes.apiKey?.name).toBe('X-API-KEY');
+  });
+});
+
+describe('openapi.json x rotas do Worker', () => {
+  // A doc e a unica superficie que o integrador le: rota sem doc nao existe
+  // para ele, e doc sem rota e promessa quebrada. Compara metodo + caminho.
+  it('toda rota /v1 esta documentada, e todo caminho documentado existe', async () => {
+    const spec = (await (await app.request('/openapi.json', {}, env)).json()) as {
+      paths: Record<string, Record<string, unknown>>;
+    };
+    const documentadas = new Set<string>();
+    for (const [caminho, ops] of Object.entries(spec.paths)) {
+      for (const metodo of Object.keys(ops)) {
+        documentadas.add(`${metodo.toUpperCase()} ${caminho}`);
+      }
+    }
+    const registradas = new Set(
+      app.routes
+        .filter((r) => r.path.startsWith('/v1/') && r.method !== 'ALL')
+        .map((r) => `${r.method} ${r.path.replace(/:([a-z_]+)/g, '{$1}')}`),
+    );
+    // Garante que a comparacao nao e vazia (app.routes mudou de forma?).
+    expect(registradas.size).toBeGreaterThan(40);
+    expect([...registradas].filter((r) => !documentadas.has(r))).toEqual([]);
+    expect([...documentadas].filter((d) => !registradas.has(d))).toEqual([]);
   });
 });
 

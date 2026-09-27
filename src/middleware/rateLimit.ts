@@ -119,14 +119,19 @@ export function rateLimit(
 // pipeline). Incrementa o contador do dia. Chamar SO apos a escrita ter sido
 // aceita, para nao penalizar cota em requests invalidos ou erros upstream.
 // Ver nota sobre atomicidade (sem INCR no KV) no topo do arquivo.
+//
+// `amount` > 1 so para search_results, cujo limite e medido em resultados
+// devolvidos, nao em chamadas (F2.41). Zero nao grava nada.
 export async function recordUsage(
   kv: KVNamespace,
   tenantId: string,
   action: RateLimitAction,
+  amount = 1,
 ): Promise<void> {
+  if (amount <= 0) return;
   const key = counterKey(tenantId, action);
   const current = Number((await kv.get(key)) ?? '0');
-  await kv.put(key, String(current + 1), {
+  await kv.put(key, String(current + amount), {
     expirationTtl: COUNTER_TTL_SECONDS,
   });
 }
@@ -135,16 +140,55 @@ export async function recordUsage(
 // faturamento/auditoria vai para usage_daily via RPC atomica. Best-effort
 // pos-resposta de proposito: telemetria nunca bloqueia nem derruba a request
 // (o KV acima continua sendo a fonte do rate limit).
+//
+// `p_count` so vai quando e diferente de 1 (migration 0013): a assinatura
+// antiga da RPC continua atendendo todas as chamadas de sempre.
 export function persistUsage(
   c: Context<{ Bindings: Env; Variables: Variables }>,
   tenantId: string,
   action: RateLimitAction,
+  amount = 1,
 ): void {
-  fireAndForget(c, () =>
-    supabaseRpc(c.env, 'increment_usage', {
-      p_tenant_id: tenantId,
-      p_action: action,
-      p_day: new Date().toISOString().slice(0, 10),
-    }),
-  );
+  if (amount <= 0) return;
+  const params: Record<string, unknown> = {
+    p_tenant_id: tenantId,
+    p_action: action,
+    p_day: new Date().toISOString().slice(0, 10),
+  };
+  if (amount !== 1) params.p_count = amount;
+  fireAndForget(c, () => supabaseRpc(c.env, 'increment_usage', params));
+}
+
+// Teto so de TENTATIVAS (revisao da F2.41): para leitura que nao tem cota
+// diaria (caixa de entrada, que a origem sincroniza e nao toca o LinkedIn),
+// mas que ainda assim chama a origem e, no caso do anexo, passa banda pelo
+// Worker. Sem teto, uma chave valida martelava a conta-mestra sem limite e o
+// throttle dela cairia em TODOS os tenants. Nao e cota (nao aparece no
+// painel): so o corte de abuso, alto o bastante para nenhum uso normal bater.
+// Mesma mecanica do teto do rateLimit: le, recusa acima do teto sem gravar,
+// grava best-effort.
+export function tetoDeTentativas(
+  nome: string,
+  teto: number,
+): MiddlewareHandler<{ Bindings: Env; Variables: Variables }> {
+  return async (c, next) => {
+    const kv = c.env.RATE_LIMIT;
+    if (!kv) return c.json({ error: 'rate_limit_unavailable' }, 500);
+    const tenant = c.get('tenant');
+    const day = new Date().toISOString().slice(0, 10);
+    const chave = `rlt:${tenant.tenantId}:${nome}:${day}`;
+    const tentativas = Number((await kv.get(chave)) ?? '0');
+    if (tentativas >= teto) {
+      const retryAfter = secondsUntilNextUtcMidnight(new Date());
+      c.header('Retry-After', String(retryAfter));
+      return c.json(
+        { error: 'rate_limited', reason: 'too_many_attempts', action: nome, limit: teto, retry_after: retryAfter },
+        429,
+      );
+    }
+    await kv
+      .put(chave, String(tentativas + 1), { expirationTtl: COUNTER_TTL_SECONDS })
+      .catch(() => {});
+    await next();
+  };
 }

@@ -58,6 +58,7 @@ vi.mock('../src/lib/unipile', () => ({
 import app from '../src/index';
 import { sendInvitation, listChats } from '../src/lib/unipile';
 import { memoryKV } from './helpers';
+import { accountIdPublico } from '../src/lib/contas';
 
 const env = {
   ENVIRONMENT: 'test',
@@ -110,15 +111,16 @@ describe('POST /v1/invitations', () => {
     expect(sendInvitation).not.toHaveBeenCalled();
   });
 
-  it('ignora account_id do corpo: usa o do tenant, nunca o de B', async () => {
-    const res = await postInvite(KEY_A, {
-      provider_id: 'p1',
-      account_id: ACCT_B, // tentativa de convidar pela conta de B
-    });
-    expect(res.status).toBe(200);
-    const accountUsed = vi.mocked(sendInvitation).mock.calls.at(-1)?.[2];
-    expect(accountUsed).toBe(ACCT_A);
-    expect(accountUsed).not.toBe(ACCT_B);
+  it('account_id de B no corpo: 404 e o convite nao sai por conta nenhuma', async () => {
+    vi.mocked(sendInvitation).mockClear();
+    // F2.42: account_id que nao e do grupo da chave nao e ignorado em
+    // silencio (o cliente acharia que agiu pela conta que pediu): e 404.
+    for (const alheio of [ACCT_B, await accountIdPublico('tB')]) {
+      const res = await postInvite(KEY_A, { provider_id: 'p1', account_id: alheio });
+      expect(res.status).toBe(404);
+      expect(await res.json()).toEqual({ error: 'account_not_found' });
+    }
+    expect(sendInvitation).not.toHaveBeenCalled();
   });
 });
 

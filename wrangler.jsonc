@@ -42,6 +42,6 @@
     // cabecalho de todo e-mail que sai. So a RESEND_API_KEY e secret.
     // O endereco precisa ser do dominio verificado no Resend, e e para ele
     // que volta a resposta de quem responde em vez de clicar no link.
-    "EMAIL_FROM": "Playbook API <victor@playbooklab.com.br>"
+    "EMAIL_FROM": "Playbook API <contato@playbooklab.com.br>"
   }
 }

@@ -333,7 +333,7 @@ export async function createCardCheckout(
       },
       items: [
         {
-          name: 'Plano mensal',
+          name: 'Playbook API',
           description: input.description,
           quantity: 1,
           value: input.value,

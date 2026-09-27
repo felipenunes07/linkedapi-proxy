@@ -3,7 +3,7 @@
   "info": {
     "title": "Playbook API",
     "version": "1.0.0",
-    "description": "Envie mensagens e convites e leia suas conversas do LinkedIn a partir do seu sistema, com uma chave sua e sem instalar nada.\n\n## Autenticacao\n\nToda chamada leva a sua chave no header `X-API-KEY`. A chave nasce no painel, aparece uma unica vez e vale para a conta de LinkedIn daquele painel: a conta usada em cada chamada e determinada pela chave, voce nao precisa (nem pode) informa-la no request.\n\n```bash\ncurl https://api.playbooklab.com.br/v1/chats -H \"X-API-KEY: lk_live_...\"\n```\n\n## Primeira chamada\n\nComece por `GET /v1/chats`: ela lista suas conversas e e de onde sai o `chat_id` que voce usa para enviar mensagem. Leitura nao consome limite diario.\n\n## Respostas e erros\n\nSucesso vem sempre no envelope `{ \"ok\": true, \"data\": ... }`. Erro vem como `{ \"error\": \"<codigo>\" }`, com campos extras conforme o caso. Os codigos que mais aparecem:\n\n| Codigo | O que aconteceu |\n| --- | --- |\n| `invalid_api_key` | chave errada, revogada ou ausente |\n| `account_paused` | pagamento em atraso: a conta volta com o pagamento |\n| `linkedin_not_connected` | a conta do painel ainda nao conectou o LinkedIn |\n| `rate_limited` | limite diario atingido (veja abaixo) |\n| `not_found` | o recurso nao existe ou nao e desta conta |\n\n## Limites diarios\n\nEnviar mensagem e enviar convite sao as acoes que o LinkedIn restringe quando usadas em volume, entao existe um teto por dia: **80 mensagens** e **30 convites**, que zeram as 21h (horario de Brasilia). Listar conversas nao consome nada. O teto protege o seu perfil, nao a nossa infraestrutura.\n\n## Webhooks\n\nCadastre uma URL https no painel e passamos a avisar o seu sistema, com assinatura HMAC no header `X-Webhook-Signature`, quando chegar mensagem nova e quando a conexao do LinkedIn cair. Os endpoints de webhook estao em **Conta**, abaixo.\n\n## Suporte\n\nDuvida ou algo fora do esperado: victor@playbooklab.com.br."
+    "description": "Automatize o seu LinkedIn a partir do seu sistema, com uma chave sua e sem instalar nada: busque pessoas e empresas, leia perfis, envie convites e mensagens (com anexo e InMail), acompanhe conversas, responda convites e publique, comente e reaja no feed.\n\n## Autenticacao\n\nToda chamada leva a sua chave no header `X-API-KEY`. A chave nasce no painel, aparece uma unica vez e vale para a conta de LinkedIn daquele painel: a conta usada em cada chamada e determinada pela chave, voce nao precisa (nem pode) informa-la no request.\n\n```bash\ncurl https://api.playbooklab.com.br/v1/chats -H \"X-API-KEY: lk_live_...\"\n```\n\n## Primeira chamada\n\nComece por `GET /v1/chats`: ela lista suas conversas e e de onde sai o `chat_id` que voce usa para enviar mensagem. Ler a caixa de entrada nao consome limite diario.\n\n## Respostas e erros\n\nSucesso vem sempre no envelope `{ \"ok\": true, \"data\": ... }`. Erro vem como `{ \"error\": \"<codigo>\" }`, com campos extras conforme o caso. Os codigos que mais aparecem:\n\n| Codigo | O que aconteceu |\n| --- | --- |\n| `invalid_api_key` | chave errada, revogada ou ausente |\n| `account_paused` | pagamento em atraso: a conta volta com o pagamento |\n| `linkedin_not_connected` | a conta do painel ainda nao conectou o LinkedIn |\n| `rate_limited` | limite diario atingido (veja abaixo) |\n| `not_found` | o recurso nao existe ou nao e desta conta |\n\n## Limites diarios\n\nO LinkedIn restringe contas que agem em volume, entao cada familia de acao tem um teto por dia, que zera as 21h (horario de Brasilia). O teto protege o seu perfil, nao a nossa infraestrutura. So conta o que o LinkedIn aceitou: erro nao consome.\n\n| Limite | Por dia | O que conta |\n| --- | --- | --- |\n| `messages` | 80 | enviar mensagem, iniciar conversa |\n| `invitations` | 30 | enviar convite |\n| `profile_views` | 80 | abrir perfil de pessoa ou pagina de empresa |\n| `search_results` | 1000 | resultados de busca devolvidos (cada chamada conta no minimo 10, uma pagina) |\n| `network_reads` | 200 | seu perfil, conexoes, seguidores, convites pendentes, saldo de InMail, ids de filtro |\n| `content_reads` | 100 | ler posts, comentarios e reacoes |\n| `invitation_responses` | 50 | aceitar, recusar ou cancelar convite |\n| `reactions` | 60 | reagir a post, comentario ou mensagem; endossar |\n| `comments` | 30 | comentar |\n| `posts` | 5 | publicar |\n| `chat_actions` | 100 | editar ou apagar mensagem, marcar como lida, apagar conversa |\n\nLer a caixa de entrada (conversas, mensagens, participantes, anexos) nao consome limite. Existe so um teto contra abuso, que nenhum uso normal alcanca: 5000 leituras e 500 downloads de anexo por dia (`429` com `reason: too_many_attempts`).\n\n## Paginacao\n\nListas devolvem `{ items, cursor }`. Para a proxima pagina, repita a chamada com `?cursor=<valor>`. O cursor e opaco e vale so para a mesma rota e a mesma chave.\n\n## Webhooks\n\nNo painel, em **Webhooks**, voce cria quantos webhooks quiser (ate 10 por conta), cada um com um nome, uma URL https e os eventos que o disparam. Cada entrega e um POST JSON `{type, data}` assinado com o secret daquele webhook (header `X-Webhook-Signature`), e todo `data` traz o `account_id` da conta de origem.\n\n| Evento | Quando |\n| --- | --- |\n| `account.disconnected` | a conexao do LinkedIn caiu (traz `reconnect_url`) |\n| `account.reconnected` | a conexao voltou |\n| `message.received` | mensagem nova numa conversa, inclusive as que a propria conta enviou |\n| `message.read` | a mensagem foi lida |\n| `message.reaction` | alguem reagiu a uma mensagem (traz `reaction`) |\n| `message.edited` | uma mensagem foi editada (traz o `text` novo) |\n| `message.deleted` | uma mensagem foi apagada |\n| `message.delivered` | a mensagem foi entregue |\n| `relation.new` | um convite foi aceito e a pessoa virou conexao. Nao e em tempo real: pode chegar horas depois do aceite |\n\nPara quem configura por codigo, `PUT /v1/webhook` (em **Conta**, abaixo) continua valendo: ele cuida do webhook mais antigo da conta, que recebe mensagem nova e conexao caiu/voltou.\n\n## Suporte\n\nDuvida ou algo fora do esperado: contato@playbooklab.com.br."
   },
   "servers": [
     {
@@ -22,16 +22,36 @@
   ],
   "tags": [
     {
+      "name": "Conversas",
+      "description": "Liste, abra, inicie e organize conversas."
+    },
+    {
       "name": "Mensagens",
-      "description": "Enviar mensagens em conversas existentes."
+      "description": "Envie, leia, edite, apague e reaja a mensagens; baixe anexos."
+    },
+    {
+      "name": "Busca",
+      "description": "Encontre pessoas, empresas e posts com os filtros do LinkedIn."
+    },
+    {
+      "name": "Perfis",
+      "description": "Seu perfil e o de qualquer pessoa: dados, posts, comentarios, reacoes e endossos."
+    },
+    {
+      "name": "Empresas",
+      "description": "Paginas de empresa e seus posts."
     },
     {
       "name": "Convites",
-      "description": "Enviar convites de conexao."
+      "description": "Envie, acompanhe, cancele, aceite e recuse convites de conexao."
     },
     {
-      "name": "Conversas",
-      "description": "Listar suas conversas."
+      "name": "Rede",
+      "description": "Suas conexoes e seus seguidores."
+    },
+    {
+      "name": "Posts",
+      "description": "Publique, leia, comente e reaja."
     },
     {
       "name": "Conta",
@@ -45,7 +65,7 @@
           "Mensagens"
         ],
         "summary": "Enviar mensagem",
-        "description": "Envia uma mensagem de texto em uma conversa que ja existe. Use `GET /v1/chats` para obter o `chat_id`.",
+        "description": "Envia uma mensagem numa conversa existente. Aceita JSON ou `multipart/form-data` com arquivos no campo `attachments` (ate 5, 15 MB somados); com anexo, `text` e opcional.\n\nConsome o limite diario `messages`.",
         "operationId": "sendMessage",
         "requestBody": {
           "required": true,
@@ -57,6 +77,29 @@
               "example": {
                 "chat_id": "abc123",
                 "text": "Ola! Tudo bem?"
+              }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "chat_id"
+                ],
+                "properties": {
+                  "chat_id": {
+                    "type": "string"
+                  },
+                  "text": {
+                    "type": "string"
+                  },
+                  "attachments": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "binary"
+                    }
+                  }
+                }
               }
             }
           }
@@ -87,11 +130,14 @@
           "402": {
             "$ref": "#/components/responses/AccountPaused"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "409": {
             "$ref": "#/components/responses/AccountNotReady"
           },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
           },
           "429": {
             "$ref": "#/components/responses/RateLimited"
@@ -108,7 +154,7 @@
           "Convites"
         ],
         "summary": "Enviar convite",
-        "description": "Envia um convite de conexao para um destinatario. O `provider_id` e o identificador do destinatario no LinkedIn.",
+        "description": "Envia um convite de conexao para um destinatario. O `provider_id` e o identificador do destinatario no LinkedIn.\n\nConsome o limite diario `invitations`.",
         "operationId": "sendInvitation",
         "requestBody": {
           "required": true,
@@ -150,11 +196,14 @@
           "402": {
             "$ref": "#/components/responses/AccountPaused"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFoundProfile"
+          },
           "409": {
             "$ref": "#/components/responses/AccountNotReady"
           },
-          "404": {
-            "$ref": "#/components/responses/NotFoundProfile"
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
           },
           "429": {
             "$ref": "#/components/responses/RateLimited"
@@ -191,6 +240,35 @@
             "description": "Cursor de paginacao retornado por uma chamada anterior.",
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "unread",
+            "in": "query",
+            "required": false,
+            "description": "`true` so nao lidas; `false` so lidas.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "required": false,
+            "description": "So itens anteriores a esta data (ISO 8601, ex.: `2026-09-01` ou `2026-09-01T12:00:00Z`).",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "description": "So itens posteriores a esta data (ISO 8601).",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
             }
           }
         ],
@@ -229,6 +307,163 @@
           },
           "409": {
             "$ref": "#/components/responses/AccountNotReady"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Conversas"
+        ],
+        "summary": "Iniciar conversa",
+        "description": "Abre uma conversa nova com uma pessoa (ou retoma a existente) e envia a primeira mensagem. Para quem nao e sua conexao, use `inmail: true` (gasta credito de InMail). Para falar com uma pagina de empresa, informe `topic`.\n\nConsome o limite diario `messages`.",
+        "operationId": "startChat",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "provider_id"
+                ],
+                "properties": {
+                  "provider_id": {
+                    "type": "string",
+                    "description": "`provider_id` da pessoa ou id da empresa."
+                  },
+                  "text": {
+                    "type": "string",
+                    "maxLength": 8000,
+                    "description": "Obrigatorio sem anexo."
+                  },
+                  "inmail": {
+                    "type": "boolean",
+                    "description": "Enviar como InMail."
+                  },
+                  "subject": {
+                    "type": "string",
+                    "maxLength": 200,
+                    "description": "Assunto (InMail)."
+                  },
+                  "topic": {
+                    "type": "string",
+                    "enum": [
+                      "service_request",
+                      "request_demo",
+                      "support",
+                      "careers",
+                      "other"
+                    ],
+                    "description": "Obrigatorio para falar com empresa."
+                  },
+                  "invitation_id": {
+                    "type": "string",
+                    "description": "Para responder a quem te convidou, antes de aceitar o convite."
+                  }
+                }
+              },
+              "example": {
+                "provider_id": "ACoAAB1234567890",
+                "text": "Oi! Vi seu post sobre prospeccao e queria trocar uma ideia."
+              }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "provider_id": {
+                    "type": "string"
+                  },
+                  "text": {
+                    "type": "string"
+                  },
+                  "inmail": {
+                    "type": "string"
+                  },
+                  "subject": {
+                    "type": "string"
+                  },
+                  "attachments": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "binary"
+                    },
+                    "description": "Ate 5 arquivos, 15 MB somados."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Sucesso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "chat_id": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "message_id": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "chat_id": "Ab12Cd34Ef56Gh78Ij90Kl",
+                    "message_id": "Mn12Op34Qr56St78Uv90Wx"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/AccountPaused"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFoundResource"
+          },
+          "409": {
+            "$ref": "#/components/responses/AccountNotReady"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamError"
@@ -280,7 +515,7 @@
           "Conta"
         ],
         "summary": "Configurar webhook de eventos",
-        "description": "Registra a URL https que recebera seus eventos (ex.: `message.received` quando alguem responde uma conversa; `account.disconnected` com um link de reconexao quando sua sessao cair). Cada entrega e um POST JSON `{type, data}` assinado: valide `X-Webhook-Signature` (sha256=HMAC-SHA256 do `\"{X-Webhook-Timestamp}.{corpo}\"` com o secret retornado aqui). O secret aparece UMA unica vez.",
+        "description": "Registra a URL https do webhook principal da conta (o mais antigo), que recebe `message.received`, `account.disconnected` (com um link de reconexao) e `account.reconnected`. Se ele ja existe, troca a URL e gera um secret novo. Para escolher outros eventos, ou ter mais de um webhook, use o painel. Cada entrega e um POST JSON `{type, data}` assinado: valide `X-Webhook-Signature` (sha256=HMAC-SHA256 do `\"{X-Webhook-Timestamp}.{corpo}\"` com o secret retornado aqui). O secret aparece UMA unica vez.",
         "operationId": "configureWebhook",
         "requestBody": {
           "required": true,
@@ -327,6 +562,9 @@
           },
           "409": {
             "$ref": "#/components/responses/AccountNotReady"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
           }
         }
       },
@@ -396,6 +634,3515 @@
           },
           "409": {
             "$ref": "#/components/responses/AccountNotReady"
+          }
+        }
+      }
+    },
+    "/v1/chats/{chat_id}": {
+      "get": {
+        "tags": [
+          "Conversas"
+        ],
+        "summary": "Detalhe da conversa",
+        "description": "Uma conversa, com a ultima mensagem. Leitura da caixa de entrada: nao consome limite.",
+        "operationId": "getChat",
+        "parameters": [
+          {
+            "name": "chat_id",
+            "in": "path",
+            "required": true,
+            "description": "Id da conversa (de `GET /v1/chats`).",
+            "schema": {
+              "type": "string"
+            },
+            "example": "Ab12Cd34Ef56Gh78Ij90Kl"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sucesso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/ChatDetail"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/AccountPaused"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFoundResource"
+          },
+          "409": {
+            "$ref": "#/components/responses/AccountNotReady"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Conversas"
+        ],
+        "summary": "Marcar como lida ou nao lida",
+        "operationId": "updateChat",
+        "description": "Marca a conversa como lida (`read: true`) ou nao lida (`read: false`).\n\nConsome o limite diario `chat_actions`.",
+        "parameters": [
+          {
+            "name": "chat_id",
+            "in": "path",
+            "required": true,
+            "description": "Id da conversa (de `GET /v1/chats`).",
+            "schema": {
+              "type": "string"
+            },
+            "example": "Ab12Cd34Ef56Gh78Ij90Kl"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "read"
+                ],
+                "properties": {
+                  "read": {
+                    "type": "boolean"
+                  }
+                }
+              },
+              "example": {
+                "read": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Sucesso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "updated": {
+                          "type": "boolean"
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "updated": true
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/AccountPaused"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFoundResource"
+          },
+          "409": {
+            "$ref": "#/components/responses/AccountNotReady"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Conversas"
+        ],
+        "summary": "Apagar conversa",
+        "operationId": "deleteChat",
+        "description": "Apaga a conversa no seu LinkedIn. **Irreversivel.**\n\nConsome o limite diario `chat_actions`.",
+        "parameters": [
+          {
+            "name": "chat_id",
+            "in": "path",
+            "required": true,
+            "description": "Id da conversa (de `GET /v1/chats`).",
+            "schema": {
+              "type": "string"
+            },
+            "example": "Ab12Cd34Ef56Gh78Ij90Kl"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sucesso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "deleted": {
+                          "type": "boolean"
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "deleted": true
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/AccountPaused"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFoundResource"
+          },
+          "409": {
+            "$ref": "#/components/responses/AccountNotReady"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          }
+        }
+      }
+    },
+    "/v1/chats/{chat_id}/messages": {
+      "get": {
+        "tags": [
+          "Conversas"
+        ],
+        "summary": "Mensagens da conversa",
+        "operationId": "listChatMessages",
+        "description": "Historico da conversa, da mais recente para a mais antiga. Nao consome limite.",
+        "parameters": [
+          {
+            "name": "chat_id",
+            "in": "path",
+            "required": true,
+            "description": "Id da conversa (de `GET /v1/chats`).",
+            "schema": {
+              "type": "string"
+            },
+            "example": "Ab12Cd34Ef56Gh78Ij90Kl"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Itens por pagina (1 a 100).",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Cursor opaco da proxima pagina, devolvido pela chamada anterior da MESMA rota. Nao funciona em outra rota nem com outra chave.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "required": false,
+            "description": "So itens anteriores a esta data (ISO 8601, ex.: `2026-09-01` ou `2026-09-01T12:00:00Z`).",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "description": "So itens posteriores a esta data (ISO 8601).",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "sender_id",
+            "in": "query",
+            "required": false,
+            "description": "So mensagens deste remetente.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sucesso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "items",
+                        "cursor"
+                      ],
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Message"
+                          }
+                        },
+                        "cursor": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "Cursor da proxima pagina. `null` quando acabou."
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/AccountPaused"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFoundResource"
+          },
+          "409": {
+            "$ref": "#/components/responses/AccountNotReady"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Mensagens"
+        ],
+        "summary": "Enviar mensagem (chat no caminho)",
+        "operationId": "sendMessageToChat",
+        "description": "Igual a `POST /v1/messages`, com o `chat_id` no caminho. Aceita JSON (`text`) ou `multipart/form-data` com `attachments`.\n\nConsome o limite diario `messages`.",
+        "parameters": [
+          {
+            "name": "chat_id",
+            "in": "path",
+            "required": true,
+            "description": "Id da conversa (de `GET /v1/chats`).",
+            "schema": {
+              "type": "string"
+            },
+            "example": "Ab12Cd34Ef56Gh78Ij90Kl"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 8000
+                  }
+                }
+              },
+              "example": {
+                "text": "Segue a proposta que comentei."
+              }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string"
+                  },
+                  "attachments": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "binary"
+                    },
+                    "description": "Ate 5 arquivos, 15 MB somados."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Sucesso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageSentEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/AccountPaused"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFoundResource"
+          },
+          "409": {
+            "$ref": "#/components/responses/AccountNotReady"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          }
+        }
+      }
+    },
+    "/v1/chats/{chat_id}/attendees": {
+      "get": {
+        "tags": [
+          "Conversas"
+        ],
+        "summary": "Participantes da conversa",
+        "operationId": "listChatAttendees",
+        "parameters": [
+          {
+            "name": "chat_id",
+            "in": "path",
+            "required": true,
+            "description": "Id da conversa (de `GET /v1/chats`).",
+            "schema": {
+              "type": "string"
+            },
+            "example": "Ab12Cd34Ef56Gh78Ij90Kl"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sucesso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Attendee"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/AccountPaused"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFoundResource"
+          },
+          "409": {
+            "$ref": "#/components/responses/AccountNotReady"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          }
+        }
+      }
+    },
+    "/v1/messages/{message_id}": {
+      "get": {
+        "tags": [
+          "Mensagens"
+        ],
+        "summary": "Ler mensagem",
+        "operationId": "getMessage",
+        "parameters": [
+          {
+            "name": "message_id",
+            "in": "path",
+            "required": true,
+            "description": "Id da mensagem.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "Mn12Op34Qr56St78Uv90Wx"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sucesso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Message"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/AccountPaused"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFoundResource"
+          },
+          "409": {
+            "$ref": "#/components/responses/AccountNotReady"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Mensagens"
+        ],
+        "summary": "Editar mensagem",
+        "operationId": "editMessage",
+        "description": "Edita o texto de uma mensagem SUA, na primeira hora depois do envio (regra do LinkedIn).\n\nConsome o limite diario `chat_actions`.",
+        "parameters": [
+          {
+            "name": "message_id",
+            "in": "path",
+            "required": true,
+            "description": "Id da mensagem.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "Mn12Op34Qr56St78Uv90Wx"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "text"
+                ],
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 8000
+                  }
+                }
+              },
+              "example": {
+                "text": "Texto corrigido."
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Sucesso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "edited": {
+                          "type": "boolean"
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "edited": true
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/AccountPaused"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFoundResource"
+          },
+          "409": {
+            "$ref": "#/components/responses/AccountNotReady"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Mensagens"
+        ],
+        "summary": "Apagar mensagem",
+        "operationId": "deleteMessage",
+        "description": "Apaga uma mensagem SUA, na primeira hora depois do envio.\n\nConsome o limite diario `chat_actions`.",
+        "parameters": [
+          {
+            "name": "message_id",
+            "in": "path",
+            "required": true,
+            "description": "Id da mensagem.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "Mn12Op34Qr56St78Uv90Wx"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sucesso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "deleted": {
+                          "type": "boolean"
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "deleted": true
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/AccountPaused"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFoundResource"
+          },
+          "409": {
+            "$ref": "#/components/responses/AccountNotReady"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          }
+        }
+      }
+    },
+    "/v1/messages/{message_id}/reactions": {
+      "post": {
+        "tags": [
+          "Mensagens"
+        ],
+        "summary": "Reagir a mensagem",
+        "operationId": "reactToMessage",
+        "description": "Reage com um emoji.\n\nConsome o limite diario `reactions`.",
+        "parameters": [
+          {
+            "name": "message_id",
+            "in": "path",
+            "required": true,
+            "description": "Id da mensagem.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "Mn12Op34Qr56St78Uv90Wx"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "reaction"
+                ],
+                "properties": {
+                  "reaction": {
+                    "type": "string",
+                    "description": "Emoji, ex.: 👍"
+                  }
+                }
+              },
+              "example": {
+                "reaction": "👍"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Sucesso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "reacted": {
+                          "type": "boolean"
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "reacted": true
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/AccountPaused"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFoundResource"
+          },
+          "409": {
+            "$ref": "#/components/responses/AccountNotReady"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          }
+        }
+      }
+    },
+    "/v1/messages/{message_id}/attachments/{attachment_id}": {
+      "get": {
+        "tags": [
+          "Mensagens"
+        ],
+        "summary": "Baixar anexo",
+        "operationId": "downloadAttachment",
+        "description": "O arquivo em si (binario). O caminho pronto vem em `attachments[].download_path` de cada mensagem.",
+        "parameters": [
+          {
+            "name": "message_id",
+            "in": "path",
+            "required": true,
+            "description": "Id da mensagem.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "Mn12Op34Qr56St78Uv90Wx"
+          },
+          {
+            "name": "attachment_id",
+            "in": "path",
+            "required": true,
+            "description": "Id do anexo.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "O arquivo.",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/AccountPaused"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFoundResource"
+          },
+          "409": {
+            "$ref": "#/components/responses/AccountNotReady"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          }
+        }
+      }
+    },
+    "/v1/me": {
+      "get": {
+        "tags": [
+          "Perfis"
+        ],
+        "summary": "Seu perfil",
+        "operationId": "getMe",
+        "description": "O perfil do LinkedIn conectado a esta chave.\n\nConsome o limite diario `network_reads`.",
+        "responses": {
+          "200": {
+            "description": "Sucesso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Me"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/AccountPaused"
+          },
+          "409": {
+            "$ref": "#/components/responses/AccountNotReady"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          }
+        }
+      }
+    },
+    "/v1/inmail-balance": {
+      "get": {
+        "tags": [
+          "Perfis"
+        ],
+        "summary": "Saldo de InMail",
+        "operationId": "getInmailBalance",
+        "description": "Quantos InMails voce ainda pode enviar.\n\nConsome o limite diario `network_reads`.",
+        "responses": {
+          "200": {
+            "description": "Sucesso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/InmailBalance"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/AccountPaused"
+          },
+          "409": {
+            "$ref": "#/components/responses/AccountNotReady"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          }
+        }
+      }
+    },
+    "/v1/profiles/{identifier}": {
+      "get": {
+        "tags": [
+          "Perfis"
+        ],
+        "summary": "Perfil de uma pessoa",
+        "operationId": "getProfile",
+        "description": "Dados do perfil. Por padrao a visita NAO aparece para a pessoa em \"quem viu seu perfil\"; passe `notify=true` para aparecer. Peca so as secoes que vai usar: pedir tudo (`*`) em sequencia faz o LinkedIn limitar as respostas.\n\nConsome o limite diario `profile_views`.",
+        "parameters": [
+          {
+            "name": "identifier",
+            "in": "path",
+            "required": true,
+            "description": "Identificador da pessoa: o `provider_id` (comeca com `ACo`) ou o identificador publico (o final da URL do perfil, ex.: `joao-silva` em linkedin.com/in/joao-silva).",
+            "schema": {
+              "type": "string"
+            },
+            "example": "joao-silva"
+          },
+          {
+            "name": "sections",
+            "in": "query",
+            "required": false,
+            "description": "Secoes detalhadas, separadas por virgula: `experience`, `education`, `skills`, `languages`, `certifications`, `projects`, `volunteering_experience`, `recommendations_received`, `recommendations_given`, `about`, a versao resumida de cada uma com `_preview` (ex.: `skills_preview`), `*_preview` (todas resumidas) ou `*` (todas completas).",
+            "schema": {
+              "type": "string"
+            },
+            "example": "experience,skills"
+          },
+          {
+            "name": "notify",
+            "in": "query",
+            "required": false,
+            "description": "Registrar a visita para a pessoa. Padrao `false`.",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sucesso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Profile"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/AccountPaused"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFoundResource"
+          },
+          "409": {
+            "$ref": "#/components/responses/AccountNotReady"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          }
+        }
+      }
+    },
+    "/v1/profiles/{identifier}/posts": {
+      "get": {
+        "tags": [
+          "Perfis"
+        ],
+        "summary": "Posts de uma pessoa",
+        "operationId": "listProfilePosts",
+        "description": "Atividade recente publica da pessoa.\n\nConsome o limite diario `content_reads`.",
+        "parameters": [
+          {
+            "name": "identifier",
+            "in": "path",
+            "required": true,
+            "description": "`provider_id` da pessoa (comeca com `ACo`).",
+            "schema": {
+              "type": "string"
+            },
+            "example": "ACoAAB1234567890"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Itens por pagina (1 a 100).",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Cursor opaco da proxima pagina, devolvido pela chamada anterior da MESMA rota. Nao funciona em outra rota nem com outra chave.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sucesso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "items",
+                        "cursor"
+                      ],
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Post"
+                          }
+                        },
+                        "cursor": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "Cursor da proxima pagina. `null` quando acabou."
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/AccountPaused"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFoundResource"
+          },
+          "409": {
+            "$ref": "#/components/responses/AccountNotReady"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          }
+        }
+      }
+    },
+    "/v1/profiles/{identifier}/comments": {
+      "get": {
+        "tags": [
+          "Perfis"
+        ],
+        "summary": "Comentarios de uma pessoa",
+        "operationId": "listProfileComments",
+        "description": "Atividade recente publica da pessoa.\n\nConsome o limite diario `content_reads`.",
+        "parameters": [
+          {
+            "name": "identifier",
+            "in": "path",
+            "required": true,
+            "description": "`provider_id` da pessoa (comeca com `ACo`).",
+            "schema": {
+              "type": "string"
+            },
+            "example": "ACoAAB1234567890"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Itens por pagina (1 a 100).",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Cursor opaco da proxima pagina, devolvido pela chamada anterior da MESMA rota. Nao funciona em outra rota nem com outra chave.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sucesso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "items",
+                        "cursor"
+                      ],
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Comment"
+                          }
+                        },
+                        "cursor": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "Cursor da proxima pagina. `null` quando acabou."
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/AccountPaused"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFoundResource"
+          },
+          "409": {
+            "$ref": "#/components/responses/AccountNotReady"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          }
+        }
+      }
+    },
+    "/v1/profiles/{identifier}/reactions": {
+      "get": {
+        "tags": [
+          "Perfis"
+        ],
+        "summary": "Reacoes de uma pessoa",
+        "operationId": "listProfileReactions",
+        "description": "Atividade recente publica da pessoa.\n\nConsome o limite diario `content_reads`.",
+        "parameters": [
+          {
+            "name": "identifier",
+            "in": "path",
+            "required": true,
+            "description": "`provider_id` da pessoa (comeca com `ACo`).",
+            "schema": {
+              "type": "string"
+            },
+            "example": "ACoAAB1234567890"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Itens por pagina (1 a 100).",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Cursor opaco da proxima pagina, devolvido pela chamada anterior da MESMA rota. Nao funciona em outra rota nem com outra chave.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sucesso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "items",
+                        "cursor"
+                      ],
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Reaction"
+                          }
+                        },
+                        "cursor": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "Cursor da proxima pagina. `null` quando acabou."
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/AccountPaused"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFoundResource"
+          },
+          "409": {
+            "$ref": "#/components/responses/AccountNotReady"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          }
+        }
+      }
+    },
+    "/v1/profiles/{identifier}/chats": {
+      "get": {
+        "tags": [
+          "Perfis"
+        ],
+        "summary": "Conversas com uma pessoa",
+        "operationId": "listChatsWithProfile",
+        "description": "As suas conversas com esta pessoa (util para saber se ja existe conversa antes de iniciar outra). Nao consome limite.",
+        "parameters": [
+          {
+            "name": "identifier",
+            "in": "path",
+            "required": true,
+            "description": "`provider_id` da pessoa (comeca com `ACo`).",
+            "schema": {
+              "type": "string"
+            },
+            "example": "ACoAAB1234567890"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Itens por pagina (1 a 100).",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Cursor opaco da proxima pagina, devolvido pela chamada anterior da MESMA rota. Nao funciona em outra rota nem com outra chave.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "required": false,
+            "description": "So itens anteriores a esta data (ISO 8601, ex.: `2026-09-01` ou `2026-09-01T12:00:00Z`).",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "description": "So itens posteriores a esta data (ISO 8601).",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sucesso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "items",
+                        "cursor"
+                      ],
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/ChatDetail"
+                          }
+                        },
+                        "cursor": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "Cursor da proxima pagina. `null` quando acabou."
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/AccountPaused"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFoundResource"
+          },
+          "409": {
+            "$ref": "#/components/responses/AccountNotReady"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          }
+        }
+      }
+    },
+    "/v1/profiles/{identifier}/messages": {
+      "get": {
+        "tags": [
+          "Perfis"
+        ],
+        "summary": "Mensagens com uma pessoa",
+        "operationId": "listMessagesWithProfile",
+        "description": "Todas as mensagens trocadas com esta pessoa, em qualquer conversa. Nao consome limite.",
+        "parameters": [
+          {
+            "name": "identifier",
+            "in": "path",
+            "required": true,
+            "description": "`provider_id` da pessoa (comeca com `ACo`).",
+            "schema": {
+              "type": "string"
+            },
+            "example": "ACoAAB1234567890"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Itens por pagina (1 a 100).",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Cursor opaco da proxima pagina, devolvido pela chamada anterior da MESMA rota. Nao funciona em outra rota nem com outra chave.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "required": false,
+            "description": "So itens anteriores a esta data (ISO 8601, ex.: `2026-09-01` ou `2026-09-01T12:00:00Z`).",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "description": "So itens posteriores a esta data (ISO 8601).",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sucesso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "items",
+                        "cursor"
+                      ],
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Message"
+                          }
+                        },
+                        "cursor": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "Cursor da proxima pagina. `null` quando acabou."
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/AccountPaused"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFoundResource"
+          },
+          "409": {
+            "$ref": "#/components/responses/AccountNotReady"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          }
+        }
+      }
+    },
+    "/v1/profiles/{identifier}/endorsements": {
+      "post": {
+        "tags": [
+          "Perfis"
+        ],
+        "summary": "Endossar competencia",
+        "operationId": "endorseSkill",
+        "description": "Endossa uma competencia da pessoa. O `endorsement_id` vem de `skills[].endorsement_id` em `GET /v1/profiles/{identifier}?sections=skills`.\n\nConsome o limite diario `reactions`.",
+        "parameters": [
+          {
+            "name": "identifier",
+            "in": "path",
+            "required": true,
+            "description": "`provider_id` da pessoa (comeca com `ACo`).",
+            "schema": {
+              "type": "string"
+            },
+            "example": "ACoAAB1234567890"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "endorsement_id"
+                ],
+                "properties": {
+                  "endorsement_id": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "example": {
+                "endorsement_id": 1234567890
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Sucesso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "endorsed": {
+                          "type": "boolean"
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "endorsed": true
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/AccountPaused"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFoundResource"
+          },
+          "409": {
+            "$ref": "#/components/responses/AccountNotReady"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          }
+        }
+      }
+    },
+    "/v1/companies/{identifier}": {
+      "get": {
+        "tags": [
+          "Empresas"
+        ],
+        "summary": "Pagina de empresa",
+        "operationId": "getCompany",
+        "description": "Por identificador publico (o final de linkedin.com/company/...), id numerico ou urn.\n\nConsome o limite diario `profile_views`.",
+        "parameters": [
+          {
+            "name": "identifier",
+            "in": "path",
+            "required": true,
+            "description": "Identificador publico, id numerico ou urn da empresa.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "playbooklab"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sucesso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Company"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/AccountPaused"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFoundResource"
+          },
+          "409": {
+            "$ref": "#/components/responses/AccountNotReady"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          }
+        }
+      }
+    },
+    "/v1/companies/{identifier}/posts": {
+      "get": {
+        "tags": [
+          "Empresas"
+        ],
+        "summary": "Posts da empresa",
+        "operationId": "listCompanyPosts",
+        "description": "Use o `id` numerico de `GET /v1/companies/{identifier}`.\n\nConsome o limite diario `content_reads`.",
+        "parameters": [
+          {
+            "name": "identifier",
+            "in": "path",
+            "required": true,
+            "description": "Id numerico da empresa.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "12345678"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Itens por pagina (1 a 100).",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Cursor opaco da proxima pagina, devolvido pela chamada anterior da MESMA rota. Nao funciona em outra rota nem com outra chave.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sucesso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "items",
+                        "cursor"
+                      ],
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Post"
+                          }
+                        },
+                        "cursor": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "Cursor da proxima pagina. `null` quando acabou."
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/AccountPaused"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFoundResource"
+          },
+          "409": {
+            "$ref": "#/components/responses/AccountNotReady"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          }
+        }
+      }
+    },
+    "/v1/search": {
+      "post": {
+        "tags": [
+          "Busca"
+        ],
+        "summary": "Buscar pessoas, empresas ou posts",
+        "operationId": "search",
+        "description": "A busca do LinkedIn, com filtros. Pessoas e empresas vem 10 por pagina; posts, ate 49. Para a proxima pagina, chame de novo so com `?cursor=` (sem corpo): a busca original viaja dentro do cursor.\n\nO limite diario `search_results` conta **resultados devolvidos**, com minimo de 10 por chamada (uma pagina), nao chamadas (o LinkedIn entrega no maximo 1000 resultados por busca).\n\nFiltro que nao existe na categoria responde `400 unknown_filter` (com o nome do filtro), para voce saber que ele nao teria efeito. A busca por `url` aceita buscas de pessoas, empresas e posts (`/search/results/people/`, `/companies/`, `/content/`).",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Itens por pagina (1 a 50).",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Cursor opaco da proxima pagina, devolvido pela chamada anterior da MESMA rota. Nao funciona em outra rota nem com outra chave.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchRequest"
+              },
+              "examples": {
+                "pessoas": {
+                  "summary": "Pessoas com filtros",
+                  "value": {
+                    "category": "people",
+                    "keywords": "head de vendas",
+                    "location": [
+                      "105871508"
+                    ],
+                    "network_distance": [
+                      2,
+                      3
+                    ]
+                  }
+                },
+                "empresas": {
+                  "summary": "Empresas",
+                  "value": {
+                    "category": "companies",
+                    "keywords": "software",
+                    "headcount": [
+                      {
+                        "min": 11,
+                        "max": 50
+                      }
+                    ]
+                  }
+                },
+                "url": {
+                  "summary": "A partir de uma busca feita no LinkedIn",
+                  "value": {
+                    "url": "https://www.linkedin.com/search/results/people/?keywords=sdr"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Sucesso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "items",
+                        "cursor"
+                      ],
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/SearchResult"
+                          }
+                        },
+                        "cursor": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "Cursor da proxima pagina. `null` quando acabou."
+                        },
+                        "total_count": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ],
+                          "description": "Total estimado pelo LinkedIn."
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/AccountPaused"
+          },
+          "409": {
+            "$ref": "#/components/responses/AccountNotReady"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          }
+        }
+      }
+    },
+    "/v1/search/parameters": {
+      "get": {
+        "tags": [
+          "Busca"
+        ],
+        "summary": "Ids para os filtros da busca",
+        "operationId": "searchParameters",
+        "description": "O LinkedIn filtra por id, nao por texto. Converte \"Sao Paulo\" no id de `LOCATION`, \"Software\" no de `INDUSTRY` etc.\n\nConsome o limite diario `network_reads`.",
+        "parameters": [
+          {
+            "name": "type",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "LOCATION",
+                "PEOPLE",
+                "CONNECTIONS",
+                "COMPANY",
+                "SCHOOL",
+                "INDUSTRY",
+                "SERVICE",
+                "JOB_FUNCTION",
+                "JOB_TITLE",
+                "EMPLOYMENT_TYPE",
+                "SKILL"
+              ]
+            }
+          },
+          {
+            "name": "keywords",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "example": "Sao Paulo"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Itens por pagina (1 a 100).",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sucesso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/SearchParameter"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/AccountPaused"
+          },
+          "409": {
+            "$ref": "#/components/responses/AccountNotReady"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          }
+        }
+      }
+    },
+    "/v1/relations": {
+      "get": {
+        "tags": [
+          "Rede"
+        ],
+        "summary": "Suas conexoes",
+        "operationId": "listRelations",
+        "description": "Suas conexoes de 1o grau, das mais recentes para as mais antigas. Para saber quem aceitou convite, prefira o webhook a consultar esta lista de hora em hora (consulta em horario fixo e um padrao que o LinkedIn identifica como automacao).\n\nConsome o limite diario `network_reads`.",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Itens por pagina (1 a 100).",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Cursor opaco da proxima pagina, devolvido pela chamada anterior da MESMA rota. Nao funciona em outra rota nem com outra chave.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "required": false,
+            "description": "Filtra por nome.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sucesso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "items",
+                        "cursor"
+                      ],
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Relation"
+                          }
+                        },
+                        "cursor": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "Cursor da proxima pagina. `null` quando acabou."
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/AccountPaused"
+          },
+          "409": {
+            "$ref": "#/components/responses/AccountNotReady"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          }
+        }
+      }
+    },
+    "/v1/followers": {
+      "get": {
+        "tags": [
+          "Rede"
+        ],
+        "summary": "Seus seguidores",
+        "operationId": "listFollowers",
+        "description": "Quem segue o seu perfil.\n\nConsome o limite diario `network_reads`.",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Itens por pagina (1 a 100).",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Cursor opaco da proxima pagina, devolvido pela chamada anterior da MESMA rota. Nao funciona em outra rota nem com outra chave.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sucesso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "items",
+                        "cursor"
+                      ],
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Follower"
+                          }
+                        },
+                        "cursor": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "Cursor da proxima pagina. `null` quando acabou."
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/AccountPaused"
+          },
+          "409": {
+            "$ref": "#/components/responses/AccountNotReady"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          }
+        }
+      }
+    },
+    "/v1/invitations/sent": {
+      "get": {
+        "tags": [
+          "Convites"
+        ],
+        "summary": "Convites enviados pendentes",
+        "operationId": "listSentInvitations",
+        "description": "Convites que voce enviou e ainda nao foram aceitos.\n\nConsome o limite diario `network_reads`.",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Itens por pagina (1 a 100).",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Cursor opaco da proxima pagina, devolvido pela chamada anterior da MESMA rota. Nao funciona em outra rota nem com outra chave.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sucesso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "items",
+                        "cursor"
+                      ],
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/InvitationSent"
+                          }
+                        },
+                        "cursor": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "Cursor da proxima pagina. `null` quando acabou."
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/AccountPaused"
+          },
+          "409": {
+            "$ref": "#/components/responses/AccountNotReady"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          }
+        }
+      }
+    },
+    "/v1/invitations/sent/{invitation_id}": {
+      "delete": {
+        "tags": [
+          "Convites"
+        ],
+        "summary": "Cancelar convite",
+        "operationId": "cancelInvitation",
+        "description": "Retira um convite pendente. Atencao: o LinkedIn nao avisa quando o id nao existe (responde sucesso do mesmo jeito).\n\nConsome o limite diario `invitation_responses`.",
+        "parameters": [
+          {
+            "name": "invitation_id",
+            "in": "path",
+            "required": true,
+            "description": "Id de `GET /v1/invitations/sent`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sucesso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "canceled": {
+                          "type": "boolean"
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "canceled": true
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/AccountPaused"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFoundResource"
+          },
+          "409": {
+            "$ref": "#/components/responses/AccountNotReady"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          }
+        }
+      }
+    },
+    "/v1/invitations/received": {
+      "get": {
+        "tags": [
+          "Convites"
+        ],
+        "summary": "Convites recebidos",
+        "operationId": "listReceivedInvitations",
+        "description": "Convites que voce recebeu. Cada um traz o `shared_secret` para aceitar ou recusar.\n\nConsome o limite diario `network_reads`.",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Itens por pagina (1 a 100).",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Cursor opaco da proxima pagina, devolvido pela chamada anterior da MESMA rota. Nao funciona em outra rota nem com outra chave.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sucesso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "items",
+                        "cursor"
+                      ],
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/InvitationReceived"
+                          }
+                        },
+                        "cursor": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "Cursor da proxima pagina. `null` quando acabou."
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/AccountPaused"
+          },
+          "409": {
+            "$ref": "#/components/responses/AccountNotReady"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          }
+        }
+      }
+    },
+    "/v1/invitations/received/{invitation_id}": {
+      "post": {
+        "tags": [
+          "Convites"
+        ],
+        "summary": "Aceitar ou recusar convite",
+        "operationId": "handleInvitation",
+        "description": "Aceita ou recusa um convite recebido.\n\nConsome o limite diario `invitation_responses`.",
+        "parameters": [
+          {
+            "name": "invitation_id",
+            "in": "path",
+            "required": true,
+            "description": "Id de `GET /v1/invitations/received`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "action",
+                  "shared_secret"
+                ],
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "accept",
+                      "decline"
+                    ]
+                  },
+                  "shared_secret": {
+                    "type": "string",
+                    "description": "O `shared_secret` do convite, da listagem."
+                  }
+                }
+              },
+              "example": {
+                "action": "accept",
+                "shared_secret": "Ab12Cd34"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Sucesso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "status": "accepted"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/AccountPaused"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFoundResource"
+          },
+          "409": {
+            "$ref": "#/components/responses/AccountNotReady"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          }
+        }
+      }
+    },
+    "/v1/posts": {
+      "post": {
+        "tags": [
+          "Posts"
+        ],
+        "summary": "Publicar post",
+        "operationId": "createPost",
+        "description": "Publica no seu feed. Aceita JSON ou `multipart/form-data` com imagens/video em `attachments`. Para publicar como uma pagina que voce administra, informe `as_organization` (ids em `GET /v1/me`).\n\nConsome o limite diario `posts`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "text"
+                ],
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 3000
+                  },
+                  "external_link": {
+                    "type": "string",
+                    "format": "uri",
+                    "description": "Link com previa."
+                  },
+                  "as_organization": {
+                    "type": "string",
+                    "description": "Id da pagina de empresa."
+                  }
+                }
+              },
+              "example": {
+                "text": "Tres aprendizados de 100 conversas de prospeccao este mes."
+              }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string"
+                  },
+                  "external_link": {
+                    "type": "string"
+                  },
+                  "as_organization": {
+                    "type": "string"
+                  },
+                  "attachments": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "binary"
+                    },
+                    "description": "Ate 5 arquivos, 15 MB somados."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Sucesso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "post_id": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "post_id": "urn:li:activity:7332661864792854528"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/AccountPaused"
+          },
+          "409": {
+            "$ref": "#/components/responses/AccountNotReady"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          }
+        }
+      }
+    },
+    "/v1/posts/{post_id}": {
+      "get": {
+        "tags": [
+          "Posts"
+        ],
+        "summary": "Ler post",
+        "operationId": "getPost",
+        "description": "Um post e seus contadores.\n\nConsome o limite diario `content_reads`.",
+        "parameters": [
+          {
+            "name": "post_id",
+            "in": "path",
+            "required": true,
+            "description": "O `social_id` do post (ex.: `urn:li:activity:7332661864792854528`), ou so o numero que aparece em \"activity-...\" na URL do post.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "urn:li:activity:7332661864792854528"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sucesso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Post"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/AccountPaused"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFoundResource"
+          },
+          "409": {
+            "$ref": "#/components/responses/AccountNotReady"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          }
+        }
+      }
+    },
+    "/v1/posts/{post_id}/comments": {
+      "get": {
+        "tags": [
+          "Posts"
+        ],
+        "summary": "Comentarios do post",
+        "operationId": "listPostComments",
+        "description": "Comentarios (ou respostas de um comentario).\n\nConsome o limite diario `content_reads`.",
+        "parameters": [
+          {
+            "name": "post_id",
+            "in": "path",
+            "required": true,
+            "description": "O `social_id` do post (ex.: `urn:li:activity:7332661864792854528`), ou so o numero que aparece em \"activity-...\" na URL do post.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "urn:li:activity:7332661864792854528"
+          },
+          {
+            "name": "comment_id",
+            "in": "query",
+            "required": false,
+            "description": "Id de um comentario: lista as respostas (ou reacoes) dele em vez das do post.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort_by",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "MOST_RECENT",
+                "MOST_RELEVANT"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Itens por pagina (1 a 100).",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Cursor opaco da proxima pagina, devolvido pela chamada anterior da MESMA rota. Nao funciona em outra rota nem com outra chave.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sucesso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "items",
+                        "cursor"
+                      ],
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Comment"
+                          }
+                        },
+                        "cursor": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "Cursor da proxima pagina. `null` quando acabou."
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/AccountPaused"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFoundResource"
+          },
+          "409": {
+            "$ref": "#/components/responses/AccountNotReady"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Posts"
+        ],
+        "summary": "Comentar",
+        "operationId": "commentPost",
+        "description": "Comenta no post, ou responde a um comentario com `comment_id`.\n\nConsome o limite diario `comments`.",
+        "parameters": [
+          {
+            "name": "post_id",
+            "in": "path",
+            "required": true,
+            "description": "O `social_id` do post (ex.: `urn:li:activity:7332661864792854528`), ou so o numero que aparece em \"activity-...\" na URL do post.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "urn:li:activity:7332661864792854528"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "text"
+                ],
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1250
+                  },
+                  "comment_id": {
+                    "type": "string",
+                    "description": "Responder a este comentario."
+                  },
+                  "as_organization": {
+                    "type": "string",
+                    "description": "Comentar como a pagina de empresa."
+                  }
+                }
+              },
+              "example": {
+                "text": "Otimo ponto sobre cadencia!"
+              }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string"
+                  },
+                  "comment_id": {
+                    "type": "string"
+                  },
+                  "attachments": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "binary"
+                    },
+                    "description": "Ate 5 arquivos, 15 MB somados."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Sucesso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "comment_id": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "comment_id": "7332700000000000000"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/AccountPaused"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFoundResource"
+          },
+          "409": {
+            "$ref": "#/components/responses/AccountNotReady"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          }
+        }
+      }
+    },
+    "/v1/posts/{post_id}/reactions": {
+      "get": {
+        "tags": [
+          "Posts"
+        ],
+        "summary": "Reacoes do post",
+        "operationId": "listPostReactions",
+        "description": "Quem reagiu ao post (ou a um comentario). Bom para achar pessoas engajadas no tema.\n\nConsome o limite diario `content_reads`.",
+        "parameters": [
+          {
+            "name": "post_id",
+            "in": "path",
+            "required": true,
+            "description": "O `social_id` do post (ex.: `urn:li:activity:7332661864792854528`), ou so o numero que aparece em \"activity-...\" na URL do post.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "urn:li:activity:7332661864792854528"
+          },
+          {
+            "name": "comment_id",
+            "in": "query",
+            "required": false,
+            "description": "Id de um comentario: lista as respostas (ou reacoes) dele em vez das do post.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Itens por pagina (1 a 100).",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Cursor opaco da proxima pagina, devolvido pela chamada anterior da MESMA rota. Nao funciona em outra rota nem com outra chave.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sucesso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "items",
+                        "cursor"
+                      ],
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Reaction"
+                          }
+                        },
+                        "cursor": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "Cursor da proxima pagina. `null` quando acabou."
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/AccountPaused"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFoundResource"
+          },
+          "409": {
+            "$ref": "#/components/responses/AccountNotReady"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Posts"
+        ],
+        "summary": "Reagir ao post",
+        "operationId": "reactToPost",
+        "description": "Reage ao post, ou a um comentario com `comment_id`.\n\nConsome o limite diario `reactions`.",
+        "parameters": [
+          {
+            "name": "post_id",
+            "in": "path",
+            "required": true,
+            "description": "O `social_id` do post (ex.: `urn:li:activity:7332661864792854528`), ou so o numero que aparece em \"activity-...\" na URL do post.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "urn:li:activity:7332661864792854528"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reaction_type": {
+                    "type": "string",
+                    "enum": [
+                      "like",
+                      "celebrate",
+                      "support",
+                      "love",
+                      "insightful",
+                      "funny"
+                    ],
+                    "default": "like"
+                  },
+                  "comment_id": {
+                    "type": "string"
+                  },
+                  "as_organization": {
+                    "type": "string"
+                  }
+                }
+              },
+              "example": {
+                "reaction_type": "insightful"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Sucesso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "reacted": {
+                          "type": "boolean"
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "reacted": true
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/AccountPaused"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFoundResource"
+          },
+          "409": {
+            "$ref": "#/components/responses/AccountNotReady"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
           }
         }
       }
@@ -688,7 +4435,7 @@
           },
           "upstream_status": {
             "type": "integer",
-            "description": "Presente em erros 502: o status HTTP recebido do sistema por tras da API."
+            "description": "Presente em erros 502: o status HTTP recebido do LinkedIn."
           },
           "action": {
             "type": "string",
@@ -704,14 +4451,1400 @@
           },
           "reason": {
             "type": "string",
-            "description": "Presente em alguns 429: `too_many_attempts` quando o teto de tentativas do dia (10x o limite, contando tambem as que falharam) foi atingido."
+            "description": "Motivo legivel por maquina. Em 429: `too_many_attempts` quando o teto de tentativas do dia (10x o limite) foi atingido. Em 400 e 502: o codigo de erro informado pelo LinkedIn, quando houver."
           }
         }
+      },
+      "Me": {
+        "type": "object",
+        "description": "O perfil do LinkedIn conectado a esta chave.",
+        "properties": {
+          "provider_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Seu identificador no LinkedIn."
+          },
+          "public_identifier": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Final da URL do seu perfil."
+          },
+          "first_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "headline": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Titulo do perfil."
+          },
+          "location": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "E-mail da conta do LinkedIn."
+          },
+          "profile_picture_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "premium": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Se a conta tem LinkedIn Premium."
+          },
+          "open_profile": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Se o perfil aceita InMail gratuito."
+          },
+          "organizations": {
+            "type": "array",
+            "description": "Paginas de empresa que voce administra. Use o `id` em `as_organization` para publicar como a empresa.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "InmailBalance": {
+        "type": "object",
+        "description": "Creditos de InMail disponiveis por produto (`null` = produto nao assinado).",
+        "properties": {
+          "premium": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "sales_navigator": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "recruiter": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        }
+      },
+      "Profile": {
+        "type": "object",
+        "description": "Perfil de uma pessoa. As secoes detalhadas (experiencia, formacao, competencias...) vem conforme o parametro `sections`; campo ausente no LinkedIn vem `null`.",
+        "properties": {
+          "provider_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Identificador aceito em convites, conversas e endossos."
+          },
+          "public_identifier": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "member_urn": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "first_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "headline": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "summary": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Secao \"Sobre\"."
+          },
+          "location": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "public_profile_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "profile_picture_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "network_distance": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Grau de conexao com voce (`FIRST_DEGREE`, `SECOND_DEGREE`, `THIRD_DEGREE`, `OUT_OF_NETWORK`)."
+          },
+          "is_relationship": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Se ja e sua conexao."
+          },
+          "invitation": {
+            "description": "Convite pendente entre voces, se houver (`type`, `status`)."
+          },
+          "can_send_inmail": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "is_open_profile": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "is_premium": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "connections_count": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "follower_count": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "shared_connections_count": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "contact_info": {
+            "description": "E-mails, telefones e sites visiveis para voce."
+          },
+          "websites": {
+            "description": "Sites do perfil."
+          },
+          "work_experience": {
+            "description": "Experiencias (empresa, cargo, periodo...)."
+          },
+          "education": {
+            "description": "Formacao."
+          },
+          "skills": {
+            "description": "Competencias. `endorsement_id` e o que `POST /v1/profiles/{identifier}/endorsements` recebe."
+          },
+          "languages": {
+            "description": "Idiomas."
+          },
+          "certifications": {
+            "description": "Certificacoes."
+          },
+          "projects": {
+            "description": "Projetos."
+          },
+          "volunteering_experience": {
+            "description": "Voluntariado."
+          },
+          "recommendations": {
+            "description": "Recomendacoes recebidas e dadas."
+          }
+        },
+        "additionalProperties": true
+      },
+      "Company": {
+        "type": "object",
+        "description": "Pagina de empresa.",
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Id numerico: use em `GET /v1/companies/{id}/posts`."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "public_identifier": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "profile_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tagline": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "website": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "industry": {
+            "description": "Setores."
+          },
+          "employee_count": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "employee_count_range": {
+            "description": "Faixa de funcionarios (`from`, `to`)."
+          },
+          "followers_count": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "locations": {
+            "description": "Enderecos."
+          },
+          "messaging": {
+            "description": "Se a empresa aceita mensagem (`is_enabled`). Para falar com ela, `POST /v1/chats` com `topic`."
+          },
+          "is_following": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": true
+      },
+      "Post": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "social_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Use este id para ler, comentar e reagir ao post."
+          },
+          "share_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Data relativa como o LinkedIn mostra (ex.: \"2d\")."
+          },
+          "parsed_datetime": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Data ISO 8601."
+          },
+          "reaction_counter": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "comment_counter": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "repost_counter": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "impressions_counter": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "user_reacted": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Sua reacao, se houver."
+          },
+          "author": {
+            "description": "Autor (`id`, `name`, `public_identifier`, `is_company`, `headline`)."
+          },
+          "attachments": {
+            "description": "Imagens, videos e documentos do post."
+          },
+          "is_repost": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": true
+      },
+      "Comment": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Use como `comment_id` para responder ou listar respostas."
+          },
+          "post_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "date": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "author": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Nome do autor."
+          },
+          "author_details": {
+            "description": "Autor (`id`, `headline`, `profile_url`, `network_distance`)."
+          },
+          "reaction_counter": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "reply_counter": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": true
+      },
+      "Reaction": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`LIKE`, `PRAISE`, `APPRECIATION`, `EMPATHY`, `INTEREST` ou `ENTERTAINMENT`."
+          },
+          "post_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "comment_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "author": {
+            "description": "Quem reagiu (`id`, `name`, `headline`, `profile_url`)."
+          }
+        }
+      },
+      "Relation": {
+        "type": "object",
+        "description": "Uma conexao sua (1o grau).",
+        "properties": {
+          "provider_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Identificador aceito em `POST /v1/chats` e nos demais endpoints de perfil."
+          },
+          "public_identifier": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "first_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "headline": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "public_profile_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "profile_picture_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "member_urn": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "connection_urn": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "connected_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Quando a conexao foi feita (epoch em milissegundos)."
+          }
+        }
+      },
+      "Follower": {
+        "type": "object",
+        "properties": {
+          "provider_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "headline": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "profile_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "profile_picture_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "InvitationSent": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Id do convite."
+          },
+          "date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Data relativa como o LinkedIn mostra."
+          },
+          "parsed_datetime": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Data ISO 8601."
+          },
+          "invitation_text": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Nota enviada com o convite."
+          },
+          "invited_user": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Nome da pessoa convidada."
+          },
+          "invited_user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`provider_id` da pessoa convidada."
+          },
+          "invited_user_public_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "invited_user_description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "invited_user_profile_picture_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "InvitationReceived": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Id do convite."
+          },
+          "date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Data relativa como o LinkedIn mostra."
+          },
+          "parsed_datetime": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Data ISO 8601."
+          },
+          "invitation_text": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Nota enviada com o convite."
+          },
+          "invited_user": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Nome da pessoa convidada."
+          },
+          "invited_user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`provider_id` da pessoa convidada."
+          },
+          "invited_user_public_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "invited_user_description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "invited_user_profile_picture_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "inviter": {
+            "type": "object",
+            "description": "Quem te convidou.",
+            "properties": {
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "provider_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "public_identifier": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          "shared_secret": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Token do LinkedIn exigido para aceitar ou recusar este convite."
+          }
+        }
+      },
+      "Attachment": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`img`, `video`, `audio`, `file`, `linkedin_post`..."
+          },
+          "mimetype": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "file_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "file_size": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "unavailable": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Se o arquivo ja nao esta disponivel."
+          },
+          "download_path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Caminho para baixar o arquivo com a sua chave (`GET`)."
+          }
+        }
+      },
+      "Message": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Id da mensagem."
+          },
+          "chat_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sender_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`provider_id` de quem enviou."
+          },
+          "sender_attendee_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Id do participante (de `GET /v1/chats/{chat_id}/attendees`)."
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "subject": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "timestamp": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "ISO 8601."
+          },
+          "message_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "is_sender": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "`true` se foi voce quem enviou."
+          },
+          "seen": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "delivered": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "edited": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "deleted": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "hidden": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "is_event": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Mensagem de sistema (ex.: alguem entrou no grupo)."
+          },
+          "event_type": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "reactions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "sender_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "is_sender": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Attachment"
+            }
+          },
+          "quoted": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Mensagem citada, se for resposta.",
+            "properties": {
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "sender_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "text": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "ChatDetail": {
+        "type": "object",
+        "description": "Detalhe da conversa, com a ultima mensagem.",
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Id da conversa."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Nome da conversa/contato."
+          },
+          "timestamp": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Data/hora da ultima atividade (ISO 8601)."
+          },
+          "unread_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Mensagens nao lidas."
+          },
+          "archived": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "1 se a conversa esta arquivada, 0 caso contrario."
+          },
+          "attendee_provider_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Identificador do contato no LinkedIn."
+          },
+          "read_only": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Se a conversa nao aceita resposta."
+          },
+          "pinned": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "muted_until": {
+            "description": "Silenciada ate (quando houver)."
+          },
+          "last_message": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Message"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "Attendee": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "provider_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "is_self": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "`true` para voce mesmo."
+          },
+          "hidden": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "profile_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "picture_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "occupation": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "network_distance": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "is_company": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        }
+      },
+      "SearchResult": {
+        "type": "object",
+        "description": "Um resultado de busca. `type` diz o que e: `PEOPLE` (pessoa, com `id` = `provider_id`), `COMPANY` (empresa) ou, na busca de posts, um Post.",
+        "properties": {
+          "type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "public_identifier": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "headline": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "location": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "industry": {},
+          "network_distance": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "profile_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "profile_picture_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "followers_count": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "shared_connections_count": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "pending_invitation": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "premium": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "summary": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Empresas: descricao."
+          },
+          "headcount": {
+            "description": "Empresas: faixa de funcionarios."
+          }
+        },
+        "additionalProperties": true
+      },
+      "SearchParameter": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Use este id no filtro correspondente de `POST /v1/search`."
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "picture_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "SearchRequest": {
+        "type": "object",
+        "description": "Informe `category` e os filtros, OU `url` com uma busca feita no LinkedIn. Filtros por lista (`location`, `industry`, `company`, `school`...) recebem ids de `GET /v1/search/parameters`.",
+        "properties": {
+          "category": {
+            "type": "string",
+            "enum": [
+              "people",
+              "companies",
+              "posts"
+            ]
+          },
+          "keywords": {
+            "type": "string"
+          },
+          "location": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Ids de LOCATION."
+          },
+          "industry": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Ids de INDUSTRY."
+          },
+          "company": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Pessoas: empresa atual (ids de COMPANY)."
+          },
+          "past_company": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "school": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Ids de SCHOOL."
+          },
+          "network_distance": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "enum": [
+                1,
+                2,
+                3
+              ]
+            },
+            "description": "Grau de conexao."
+          },
+          "profile_language": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Idioma do perfil (ISO 639-1, ex.: `pt`)."
+          },
+          "advanced_keywords": {
+            "type": "object",
+            "description": "Pessoas: busca por campo.",
+            "properties": {
+              "first_name": {
+                "type": "string"
+              },
+              "last_name": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "company": {
+                "type": "string"
+              },
+              "school": {
+                "type": "string"
+              }
+            }
+          },
+          "headcount": {
+            "type": "array",
+            "description": "Empresas: faixas de funcionarios.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "min": {
+                  "type": "integer"
+                },
+                "max": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "has_job_offers": {
+            "type": "boolean",
+            "description": "Empresas: so as que tem vagas abertas."
+          },
+          "sort_by": {
+            "type": "string",
+            "description": "Posts: `relevance` ou `date`."
+          },
+          "date_posted": {
+            "type": "string",
+            "description": "Posts: `past_day`, `past_week` ou `past_month`."
+          },
+          "url": {
+            "type": "string",
+            "description": "Alternativa aos filtros: URL de uma busca feita em linkedin.com/search/results/..."
+          }
+        },
+        "additionalProperties": true
       }
     },
     "responses": {
       "BadRequest": {
-        "description": "Requisicao invalida (campo obrigatorio ausente ou JSON malformado).",
+        "description": "Requisicao invalida: campo obrigatorio ausente, formato errado, JSON malformado, cursor invalido, ou filtro recusado pelo LinkedIn (`invalid_request`, com `reason`).",
         "content": {
           "application/json": {
             "schema": {
@@ -726,6 +5859,23 @@
               "invalid_json": {
                 "value": {
                   "error": "invalid_json"
+                }
+              },
+              "invalid_cursor": {
+                "value": {
+                  "error": "invalid_cursor"
+                }
+              },
+              "invalid_request": {
+                "value": {
+                  "error": "invalid_request",
+                  "reason": "invalid_parameters"
+                }
+              },
+              "unknown_filter": {
+                "value": {
+                  "error": "unknown_filter",
+                  "filter": "hiring_project"
                 }
               }
             }
@@ -814,7 +5964,7 @@
         }
       },
       "UpstreamError": {
-        "description": "A API esta no ar, mas a operacao falhou no sistema por tras dela. `upstream_status` traz o status recebido.",
+        "description": "A API esta no ar, mas o LinkedIn recusou ou falhou a operacao. `upstream_status` traz o status recebido e, quando o LinkedIn informa o motivo, `reason` traz o codigo (ex.: `cannot_resend_yet` quando o limite de convites do proprio LinkedIn foi atingido, `user_unreachable` quando a pessoa nao pode receber mensagem sua).",
         "content": {
           "application/json": {
             "schema": {
@@ -822,7 +5972,8 @@
             },
             "example": {
               "error": "upstream_error",
-              "upstream_status": 500
+              "upstream_status": 422,
+              "reason": "cannot_resend_yet"
             }
           }
         }
@@ -852,6 +6003,33 @@
             }
           }
         }
+      },
+      "NotFoundResource": {
+        "description": "O recurso nao existe ou nao pertence a sua conta (as duas situacoes respondem igual).",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            },
+            "example": {
+              "error": "not_found"
+            }
+          }
+        }
+      },
+      "PayloadTooLarge": {
+        "description": "Corpo grande demais: anexos acima de 15 MB somados (`attachments_too_large`) ou JSON acima de 1 MB (`body_too_large`).",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            },
+            "example": {
+              "error": "attachments_too_large",
+              "max_bytes": 15728640
+            }
+          }
+        }
       }
     }
   },
@@ -859,9 +6037,24 @@
     {
       "name": "Mensagens e conversas",
       "tags": [
-        "Mensagens",
+        "Conversas",
+        "Mensagens"
+      ]
+    },
+    {
+      "name": "Prospeccao",
+      "tags": [
+        "Busca",
+        "Perfis",
+        "Empresas",
         "Convites",
-        "Conversas"
+        "Rede"
+      ]
+    },
+    {
+      "name": "Conteudo",
+      "tags": [
+        "Posts"
       ]
     },
     {

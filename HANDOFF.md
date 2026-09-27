@@ -12,7 +12,7 @@ Camada proxy sobre a Unipile para automação de LinkedIn. Vendemos "a nossa API
 em BRL; por baixo roteamos para a Unipile sob uma única conta-mestra. O nome do
 produto é **provisório: "Playbook API"** (decidido em 2026-09-10; "LinkedAPI"
 era placeholder e segue só no nome dos repositórios). Contato publicado:
-victor@playbooklab.com.br.
+contato@playbooklab.com.br.
 
 - Landing e painel do cliente: **Vercel**,
   https://app.playbooklab.com.br (deploy a cada push no `master` do
@@ -44,6 +44,7 @@ humana** (logins, contas, gente testando): [ACOES-HUMANAS.md](ACOES-HUMANAS.md).
 | Marco 4 | Auto-conexão (hosted auth) | ✅ **mecanismo PASS em produção 2026-09-02** (callback + token + tenant + vínculo automático, âncora M4.11); prova com pessoa EXTERNA e teste não-dev: **DEFERRED, o 1º onboarding real é a evidência final** |
 | Fase 2 | Billing, webhooks, planos, reconexão, admin | ✅ **completa em 2026-09-03**: código, secrets, webhooks da Unipile, billing provado ponta a ponta no Asaas sandbox (pagar → ativa, atrasar → pausa, pagar → despausa) e **Asaas de produção configurado** (key real + webhook). Falta só a primeira assinatura real ([specs/fase-2.md](specs/fase-2.md)) |
 | F2.18-F2.23 | Pix Automático no checkout + **painel do cliente** (pagou → conecta o LinkedIn → gera a chave, sem operador) + landing honesta, termos e privacidade + teto de tentativas e erros 402/409 claros na API | ✅ código + testes + 3 passadas de security review (2026-09-10). ✅ **No ar desde 2026-09-10**: migrations 0008/0009 aplicadas, Worker `291a684e`, landing `721dd6e6`, smoke 7/7 ([docs/go-live.md](docs/go-live.md) seção H). Falta a primeira compra real |
+| F2.41 | Todos os endpoints de LinkedIn Classic (de 3 para 44 operacoes na doc), com posse conferida por id, cursor lacrado, limite diario por familia e anexo em multipart | ✅ código + testes (104 novos em `test/linkedin.test.ts`) + **E2E real em 2026-09-22** (Worker local contra LinkedIn real, 60/63; as 3 são no-ops da origem). Falta: aplicar a migration 0013, `npm run deploy` e a primeira escrita com efeito real autorizada pelo dono |
 | F2.32 | Painel logado e documentação com o desenho de um console de API, com a nossa marca: barra lateral de altura inteira, seções (Contas, Webhooks, Chaves, Uso, Configurações, Assinatura) com ação principal no topo e listas em linha; `/docs` com barra própria, busca no topo e tema da marca | ✅ código em 2026-09-11, verificado no navegador (desktop e 375px). Sai no mesmo deploy do Worker e push da landing |
 | F2.29-F2.30 | Preço R$ 67, assento adicional pelo mesmo checkout (grupo de tenants, `seat_token` de uso único, lista de contas e troca no painel), painel em formato de dashboard e domínio próprio na tela de conexão | ✅ **NO AR em 2026-09-13**: migration 0011 aplicada, Worker `00cb07dd`, landing publicada na Vercel (R$ 67 na página e na cobrança), smoke ok. 249 testes, com as correções da revisão de segurança (F2.31). Domínio próprio também na tela de conexão desde 2026-09-14: certificado emitido pela origem e `UNIPILE_AUTH_HOST` ligado ([ACOES-HUMANAS.md](ACOES-HUMANAS.md) seção 3) |
 | F2.25-F2.28 | Cartão recorrente (checkout hospedado do Asaas), landing e painel na Vercel, webhooks no painel, faxina de checkouts abandonados + 3 rodadas de review adversarial | ✅ **No ar em 2026-09-10**: migration 0010, Worker `eb5a217e`, landing na Vercel (push `c12e0ac`), webhook do Asaas com CHECKOUT_PAID e chargeback, 223 testes ([docs/go-live.md](docs/go-live.md) seção I). Falta: site na conta Asaas, compra real no cartão e decidir o visual do checkout do cartão |
@@ -68,9 +69,14 @@ Provas de 2026-09-02 (Marco 4 em produção):
   ONBOARDING REAL de cliente é a evidência final das duas provas. Não estão
   concluídas; não bloqueiam o avanço.
 
-Os 3 endpoints do proxy: `POST /v1/messages`, `POST /v1/invitations`,
-`GET /v1/chats`; self-service: `POST /v1/keys/rotate` e `PUT/GET/DELETE
-/v1/webhook` (tudo no [openapi.json](openapi.json)).
+Endpoints do proxy: desde o F2.41 (2026-09-22), todo o LinkedIn Classic, 44
+operacoes na doc: perfis, empresas, busca, rede, convites, conversas,
+mensagens (com anexo) e posts, em [src/routes/linkedin.ts](src/routes/linkedin.ts),
+alem dos 3 da V1 (`POST /v1/messages`, `POST /v1/invitations`, `GET /v1/chats`)
+e do self-service (`POST /v1/keys/rotate`, `PUT/GET/DELETE /v1/webhook`). Tudo
+no [openapi.json](openapi.json); `test/docs.test.ts` falha se uma rota `/v1`
+ficar sem doc. Regras novas (posse por id, cursor lacrado, limite por familia)
+em [docs/decisoes.md](docs/decisoes.md) F2.41.
 
 ## Estado da infraestrutura (verificado em 2026-08-20)
 

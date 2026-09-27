@@ -3,6 +3,7 @@ import type { Env } from '../src/types';
 import { memoryKV } from './helpers';
 import { hashApiKey } from '../src/lib/hash';
 import { seatRef } from '../src/lib/portal';
+import { DAILY_LIMITS } from '../src/lib/limits';
 
 // Painel do cliente (F2.20 + endurecimento F2.21): o cliente conecta o
 // LinkedIn e gera a chave sem operador. Provam: a SESSAO do painel decide o
@@ -50,6 +51,8 @@ function selecionar(table: string, filters: Record<string, string>): Row[] {
   let rows = (db[table] ?? []).filter((r) => matches(r, filters));
   if (filters.order === 'created_at.desc') {
     rows = [...rows].sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+  } else if (filters.order === 'created_at.asc') {
+    rows = [...rows].sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
   }
   if (filters.limit) rows = rows.slice(0, Number(filters.limit));
   return rows.map((r) => ({ ...r }));
@@ -62,7 +65,9 @@ vi.mock('../src/lib/supabase', () => ({
   supabaseInsert: vi.fn(async (_env: Env, table: string, row: Row) => {
     seq += 1;
     const completo = {
-      id: `id-${seq}`,
+      // uuid de verdade: rotas que validam o formato do id (DELETE
+      // /portal/webhooks/:id) recusam qualquer outra coisa.
+      id: `00000000-0000-4000-8000-${String(seq).padStart(12, '0')}`,
       created_at: new Date(Date.UTC(2026, 8, 10, 12, 0, seq)).toISOString(),
       ...row,
     };
@@ -83,7 +88,9 @@ vi.mock('../src/lib/supabase', () => ({
       .filter((t) => t.contact_email === alvo && t.status === 'active')
       .map((t) => ({ id: t.id }));
   }),
-  supabaseDelete: vi.fn(async () => undefined),
+  supabaseDelete: vi.fn(async (_env: Env, table: string, filters: Record<string, string>) => {
+    db[table] = (db[table] ?? []).filter((r) => !matches(r, filters));
+  }),
   supabaseRpc: vi.fn(async () => undefined),
 }));
 
@@ -375,8 +382,13 @@ describe('GET /portal/status', () => {
         subscription: 'active',
         linkedin: 'active',
         has_key: true,
-        limits: { messages: 100, invitations: 30 },
-        usage_today: { messages: 7, invitations: 0 },
+        // Override do tenant nas duas acoes da V1; as demais no default.
+        limits: { ...DAILY_LIMITS, messages: 100, invitations: 30 },
+        // Uso de hoje de toda acao com limite (F2.41): zero onde nao houve.
+        usage_today: {
+          ...Object.fromEntries(Object.keys(DAILY_LIMITS).map((a) => [a, 0])),
+          messages: 7,
+        },
         docs_url: 'http://localhost/docs',
         email_login: true,
       },
@@ -639,54 +651,128 @@ describe('PUT /portal/email (I2: corrigir erro de digitacao)', () => {
   });
 });
 
-describe('webhook pelo painel (F2.26)', () => {
-  it('PUT grava url https + secret NOVO so no tenant da sessao; GET nunca reexibe o secret', async () => {
+describe('webhooks por evento pelo painel (F2.43)', () => {
+  const criar = (body: Record<string, unknown>, token = TOKEN_A, env = baseEnv()) =>
+    req('/portal/webhooks', { method: 'POST', token, body }, env);
+  const valido = {
+    name: 'CRM',
+    url: 'https://cliente-a.example/hook',
+    events: ['message.received', 'message.read'],
+  };
+
+  it('POST cria no tenant da SESSAO, com secret novo mostrado uma vez; GET lista sem o secret', async () => {
     const env = baseEnv();
-    const res = await req(
-      '/portal/webhook',
-      { method: 'PUT', token: TOKEN_A, body: { url: 'https://cliente-a.example/hook', tenant_id: 'tB' } },
-      env,
-    );
+    const res = await criar({ ...valido, tenant_id: 'tB' }, TOKEN_A, env);
     expect(res.status).toBe(200);
     expect(res.headers.get('Cache-Control')).toBe('no-store');
-    const body = (await res.json()) as { data: { url: string; secret: string } };
-    expect(body.data.url).toBe('https://cliente-a.example/hook');
-    expect(body.data.secret).toMatch(/^lk_whsec_[0-9a-f]{64}$/);
-    const tA = db.tenants!.find((t) => t.id === 'tA')!;
-    expect(tA.webhook_url).toBe('https://cliente-a.example/hook');
-    expect(db.tenants!.find((t) => t.id === 'tB')!.webhook_url).toBeUndefined();
-
-    const get = await req('/portal/webhook', { token: TOKEN_A }, env);
-    const text = await get.text();
-    expect(JSON.parse(text)).toEqual({
-      ok: true,
-      data: { url: 'https://cliente-a.example/hook', configured: true },
+    const body = (await res.json()) as { data: Record<string, unknown> };
+    expect(body.data).toMatchObject({
+      name: 'CRM',
+      url: 'https://cliente-a.example/hook',
+      events: ['message.received', 'message.read'],
     });
+    expect(body.data.secret).toMatch(/^lk_whsec_[0-9a-f]{64}$/);
+    expect(db.client_webhooks!.map((w) => w.tenant_id)).toEqual(['tA']);
+
+    const get = await req('/portal/webhooks', { token: TOKEN_A }, env);
+    const text = await get.text();
+    const lista = JSON.parse(text) as { data: { webhooks: Row[]; events: string[] } };
+    expect(lista.data.webhooks).toHaveLength(1);
+    expect(lista.data.webhooks[0]).toMatchObject({ name: 'CRM', events: ['message.received', 'message.read'] });
+    expect(lista.data.events).toContain('relation.new');
     expect(text).not.toContain('lk_whsec_');
+
+    // B nao ve o webhook de A.
+    const deB = await req('/portal/webhooks', { token: TOKEN_B }, env);
+    expect(((await deB.json()) as { data: { webhooks: Row[] } }).data.webhooks).toEqual([]);
   });
 
-  it.each(['http://cliente.example/hook', 'https://localhost/hook', 'https://10.0.0.1/hook', 'nao-e-url'])(
-    'destino perigoso ou invalido (%s) e recusado',
-    async (url) => {
-      const res = await req('/portal/webhook', { method: 'PUT', token: TOKEN_A, body: { url } });
-      expect(res.status).toBe(400);
-      expect(await res.json()).toEqual({ error: 'invalid_url' });
-    },
-  );
-
-  it('DELETE remove url e secret', async () => {
-    const env = baseEnv();
-    await req('/portal/webhook', { method: 'PUT', token: TOKEN_A, body: { url: 'https://a.example/h' } }, env);
-    const res = await req('/portal/webhook', { method: 'DELETE', token: TOKEN_A }, env);
+  it('eventos: grava na ordem do catalogo, sem repetir', async () => {
+    const res = await criar({ ...valido, events: ['message.read', 'account.disconnected', 'message.read'] });
     expect(res.status).toBe(200);
-    const tA = db.tenants!.find((t) => t.id === 'tA')!;
-    expect(tA.webhook_url).toBeNull();
-    expect(tA.webhook_secret).toBeNull();
+    expect(db.client_webhooks![0]!.events).toEqual(['account.disconnected', 'message.read']);
+  });
+
+  it.each([
+    [{ events: [] }, 'invalid_events'],
+    [{ events: ['message.received', 'email.sent'] }, 'invalid_events'],
+    [{ events: 'message.received' }, 'invalid_events'],
+    [{ name: '' }, 'invalid_name'],
+    [{ name: 'x'.repeat(61) }, 'invalid_name'],
+    [{ url: 'http://cliente.example/hook' }, 'invalid_url'],
+    [{ url: 'https://10.0.0.1/hook' }, 'invalid_url'],
+  ])('pedido invalido %j -> %s, nada gravado', async (troca, erro) => {
+    const res = await criar({ ...valido, ...troca });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: erro });
+    expect(db.client_webhooks ?? []).toEqual([]);
+  });
+
+  it('teto de webhooks por conta: 409 webhook_limit', async () => {
+    const env = baseEnv();
+    for (let i = 0; i < 10; i++) {
+      expect((await criar({ ...valido, name: `W${i}` }, TOKEN_A, env)).status).toBe(200);
+    }
+    const res = await criar(valido, TOKEN_A, env);
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: 'webhook_limit' });
+  });
+
+  it('DELETE remove so o webhook da propria conta', async () => {
+    const env = baseEnv();
+    const a = (await (await criar(valido, TOKEN_A, env)).json()) as { data: { id: string } };
+    const b = (await (await criar(valido, TOKEN_B, env)).json()) as { data: { id: string } };
+
+    // A tentando apagar o de B: 404, e o de B continua.
+    const alheio = await req(`/portal/webhooks/${b.data.id}`, { method: 'DELETE', token: TOKEN_A }, env);
+    expect(alheio.status).toBe(404);
+    expect(db.client_webhooks).toHaveLength(2);
+
+    const res = await req(`/portal/webhooks/${a.data.id}`, { method: 'DELETE', token: TOKEN_A }, env);
+    expect(res.status).toBe(200);
+    expect(db.client_webhooks!.map((w) => w.tenant_id)).toEqual(['tB']);
+  });
+
+  it('DELETE com id fora do formato: 404 sem consultar nada', async () => {
+    const res = await req('/portal/webhooks/nao-e-uuid', { method: 'DELETE', token: TOKEN_A });
+    expect(res.status).toBe(404);
+  });
+
+  it('caminho de antes (PUT/GET/DELETE /portal/webhook) opera no webhook principal', async () => {
+    const env = baseEnv();
+    const put = await req(
+      '/portal/webhook',
+      { method: 'PUT', token: TOKEN_A, body: { url: 'https://a.example/antigo' } },
+      env,
+    );
+    expect(put.status).toBe(200);
+    expect(db.client_webhooks).toHaveLength(1);
+    expect(db.client_webhooks![0]).toMatchObject({
+      tenant_id: 'tA',
+      url: 'https://a.example/antigo',
+      events: ['message.received', 'account.disconnected', 'account.reconnected'],
+    });
+    const get = await req('/portal/webhook', { token: TOKEN_A }, env);
+    expect(await get.json()).toEqual({
+      ok: true,
+      data: { url: 'https://a.example/antigo', configured: true },
+    });
+
+    // PUT de novo troca a URL do MESMO webhook, com secret novo.
+    const secretAntes = db.client_webhooks![0]!.secret;
+    await req('/portal/webhook', { method: 'PUT', token: TOKEN_A, body: { url: 'https://a.example/novo' } }, env);
+    expect(db.client_webhooks).toHaveLength(1);
+    expect(db.client_webhooks![0]!.url).toBe('https://a.example/novo');
+    expect(db.client_webhooks![0]!.secret).not.toBe(secretAntes);
+
+    const del = await req('/portal/webhook', { method: 'DELETE', token: TOKEN_A }, env);
+    expect(del.status).toBe(200);
+    expect(db.client_webhooks).toEqual([]);
   });
 
   it('preflight libera DELETE para a landing', async () => {
     const res = await app.request(
-      '/portal/webhook',
+      '/portal/webhooks/x',
       { method: 'OPTIONS', headers: { Origin: 'https://landing-api-linkedin.vercel.app' } },
       baseEnv(),
     );
@@ -846,6 +932,9 @@ describe('portal: assentos (F2.29)', () => {
       subscription: 'active',
     });
     expect(String(body.data.seats[1]!.ref)).toMatch(/^[0-9a-f]{24}$/);
+    // F2.42: cada conta traz o account_id que o cliente usa na API.
+    expect(body.data.seats[1]!.account_id).toBe(`acc_${String(body.data.seats[1]!.ref)}`);
+    expect(body.data.seats[0]!.account_id).toMatch(/^acc_[0-9a-f]{24}$/);
   });
 
   it('trocar de assento devolve uma sessao NOVA, que vale para o outro assento', async () => {

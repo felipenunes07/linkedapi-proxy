@@ -6,10 +6,15 @@ documento-mae do projeto e @PRD.md. Leia-o antes de decisoes de arquitetura.
 
 ## Regras invioláveis (NAO reabrir sem forte justificativa)
 
-1. **IMPORTANT: o `account_id` e SEMPRE resolvido no servidor**, a partir da API
-   key autenticada (key -> tenant -> connected_accounts). NUNCA aceite
-   `account_id` vindo do corpo/headers/query do request do cliente. Sem isso, o
-   cliente A age como o cliente B. Esta e a regra de seguranca mais critica.
+1. **IMPORTANT: o `account_id` da origem e SEMPRE resolvido no servidor**, a
+   partir da API key autenticada (key -> tenant -> connected_accounts). NUNCA
+   aceite o id da origem (nem tenant_id) vindo do corpo/headers/query do
+   request do cliente. Sem isso, o cliente A age como o cliente B. Esta e a
+   regra de seguranca mais critica. Desde o F2.42 o cliente pode ESCOLHER entre
+   as contas do proprio grupo com o NOSSO `account_id` (`acc_...`), e essa
+   escolha so e aceita em `src/lib/contas.ts` + `authMiddleware`, que conferem
+   o grupo da chave; fora do grupo = 404. Nenhuma rota le `account_id` por
+   conta propria (ver docs/decisoes.md F2.42).
 2. **IMPORTANT: master token e DSN da Unipile nunca saem do servidor.** Nao vao
    para o cliente, front-end nem logs. Vivem em Worker secrets / `.dev.vars`
    (local). Nao escreva esses valores em nenhum arquivo versionado.
@@ -48,15 +53,23 @@ Segredos locais ficam em `.dev.vars` (copie de `.dev.vars.example`).
 - O pipeline do proxy segue a ordem: autenticar chave -> resolver tenant ->
   resolver `account_id` (do banco) -> checar rate limit -> injetar master token
   + DSN + account_id -> rotear para a Unipile -> registrar uso -> responder.
-- Escopo V1: apenas LinkedIn, apenas 3 endpoints (enviar mensagem, enviar
-  convite, listar chats). Nao espelhar os 500+ endpoints da Unipile.
+- Escopo: apenas LinkedIn. Desde o F2.41 a API cobre todo o LinkedIn Classic
+  (perfis, empresas, busca, rede, convites, conversas, mensagens, posts),
+  curado em `src/routes/linkedin.ts`; fora: outros canais, Recruiter, Sales
+  Navigator e Vagas (desligados na conexao) e a rota "crua" da origem (passaria
+  por fora do rate limit e da whitelist). Nao espelhar a origem 1:1.
+- Recurso por id (conversa, mensagem) tem POSSE conferida no servidor: a
+  origem devolve recurso de outra conta quando se pede por id (F2.41).
+- Toda lista nova usa o cursor lacrado (`selaCursor`/`abreCursor`); toda
+  resposta nova passa por `lib/projecoes` (whitelist + `limpa`).
 - Nunca logar corpo de request/response que possa conter token ou PII.
 
 ## Verificacao (feche o loop)
 
 - O teste que prova o negocio e o de **isolamento multi-tenant**: a chave do
   tenant A nao consegue agir na conta do tenant B, nem passando o `account_id`
-  do B no request. Trate esse teste como criterio de aceite, nao como enfeite.
+  do B no request (da origem ou o nosso: 404, sem tocar a origem). A escolha
+  entre contas do mesmo grupo esta em `test/contas.test.ts`. Trate esse teste como criterio de aceite, nao como enfeite.
 - Sempre rode `npm run typecheck` e `npm test` antes de considerar algo pronto,
   e mostre a saida.
 

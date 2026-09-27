@@ -9,6 +9,7 @@ import type { Env } from '../src/types';
 
 const STATUS_SECRET = 'secret-do-hook-de-status';
 const MESSAGE_SECRET = 'secret-do-hook-de-mensagem';
+const USERS_SECRET = 'secret-do-hook-de-conexao';
 const ASAAS_TOKEN = 'token-do-asaas';
 
 interface AccountRow {
@@ -27,8 +28,6 @@ const db: {
   tenants: Record<
     string,
     {
-      webhook_url: string | null;
-      webhook_secret: string | null;
       contact_email?: string;
       welcome_sent_at?: string | null;
     }
@@ -42,7 +41,24 @@ const db: {
     status: string;
   }>;
   tokens: TokenRow[];
-} = { accounts: [], tenants: {}, billing: [], tokens: [] };
+  webhooks: WebhookRow[];
+} = { accounts: [], tenants: {}, billing: [], tokens: [], webhooks: [] };
+
+// Linha de client_webhooks (F2.43). Sem `events`, assina o que o endpoint
+// unico de antes recebia.
+interface WebhookRow {
+  tenant_id: string;
+  url: string;
+  secret: string;
+  events: string[];
+}
+function hook(
+  tenantId: string,
+  url: string,
+  events = ['message.received', 'account.disconnected', 'account.reconnected'],
+): WebhookRow {
+  return { tenant_id: tenantId, url, secret: `lk_whsec_${tenantId}`, events };
+}
 
 function matches(row: Record<string, unknown>, filters: Record<string, string>): boolean {
   for (const [key, value] of Object.entries(filters)) {
@@ -79,6 +95,14 @@ vi.mock('../src/lib/supabase', () => ({
       }
       if (table === 'billing_subscriptions') {
         return db.billing.filter((b) => matches(b as never, filters));
+      }
+      if (table === 'client_webhooks') {
+        // tenant_id=eq.<id> e events=cs.{<evento>} (array contem o evento).
+        const tenant = filters.tenant_id?.replace(/^eq\./, '');
+        const evento = filters.events?.match(/^cs\.\{(.+)\}$/)?.[1];
+        return db.webhooks.filter(
+          (w) => w.tenant_id === tenant && (!evento || w.events.includes(evento)),
+        );
       }
       return [];
     },
@@ -164,6 +188,7 @@ import { deliverWebhook } from '../src/lib/webhooks';
 import { sendEmail } from '../src/lib/email';
 import { createHostedAuthLink, getAccount } from '../src/lib/unipile';
 import { memoryKV } from './helpers';
+import { accountIdPublico } from '../src/lib/contas';
 
 // Cobranca como o listPayments/getPayment devolve (so o que o Worker usa).
 function cobrancaDe(
@@ -185,6 +210,7 @@ function baseEnv(overrides: Partial<Env> = {}): Env {
     RATE_LIMIT: memoryKV(),
     ACCOUNT_STATUS_HOOK_SECRET: STATUS_SECRET,
     MESSAGE_HOOK_SECRET: MESSAGE_SECRET,
+    USERS_HOOK_SECRET: USERS_SECRET,
     ASAAS_HOOK_TOKEN: ASAAS_TOKEN,
     PUBLIC_BASE_URL: 'https://api.example.workers.dev',
     ...overrides,
@@ -222,11 +248,8 @@ beforeEach(() => {
     { id: 'ca-2', tenant_id: 'tB', unipile_account_id: 'ua-2', status: 'disconnected' },
     { id: 'ca-3', tenant_id: 'tC', unipile_account_id: 'ua-3', status: 'paused' },
   ];
-  db.tenants = {
-    tA: { webhook_url: 'https://cliente-a.example/hook', webhook_secret: 'lk_whsec_a' },
-    tB: { webhook_url: null, webhook_secret: null },
-    tC: { webhook_url: null, webhook_secret: null },
-  };
+  db.tenants = { tA: {}, tB: {}, tC: {} };
+  db.webhooks = [hook('tA', 'https://cliente-a.example/hook')];
   db.billing = [
     { tenant_id: 'tA', asaas_subscription_id: 'sub_A', status: 'active' },
     { tenant_id: 'tC', asaas_subscription_id: 'sub_C', status: 'overdue' },
@@ -238,6 +261,7 @@ describe('gate de secret (todos os hooks)', () => {
   it.each([
     ['/hooks/account-status', 'ACCOUNT_STATUS_HOOK_SECRET'],
     ['/hooks/message-received', 'MESSAGE_HOOK_SECRET'],
+    ['/hooks/relation', 'USERS_HOOK_SECRET'],
   ])('%s: sem secret configurado responde 500 (fail-closed)', async (path, envKey) => {
     const env = baseEnv({ [envKey]: undefined } as Partial<Env>);
     const res = await post(path, {}, { 'x-hook-secret': 'qualquer' }, env);
@@ -292,7 +316,7 @@ describe('POST /hooks/account-status', () => {
   });
 
   it('sessao voltou: conta disconnected vira active e notifica (sem link)', async () => {
-    db.tenants.tB = { webhook_url: 'https://b.example/hook', webhook_secret: 's' };
+    db.webhooks.push(hook('tB', 'https://b.example/hook'));
     const res = await post(
       '/hooks/account-status',
       { AccountStatus: { account_id: 'ua-2', message: 'OK' } },
@@ -305,7 +329,7 @@ describe('POST /hooks/account-status', () => {
   });
 
   it('#3: sessao voltou com a assinatura em atraso: vira paused, nunca active', async () => {
-    db.tenants.tB = { webhook_url: 'https://b.example/hook', webhook_secret: 's' };
+    db.webhooks.push(hook('tB', 'https://b.example/hook'));
     db.billing.push({ tenant_id: 'tB', asaas_subscription_id: 'sub_B', status: 'overdue' });
     const res = await post(
       '/hooks/account-status',
@@ -380,7 +404,7 @@ describe('POST /hooks/account-status', () => {
 });
 
 describe('POST /hooks/message-received', () => {
-  it('repassa ao webhook do tenant so a whitelist, sem account_id', async () => {
+  it('repassa ao webhook do tenant so a whitelist, com o NOSSO account_id (nunca o da origem)', async () => {
     const res = await post(
       '/hooks/message-received',
       {
@@ -400,6 +424,8 @@ describe('POST /hooks/message-received', () => {
     const call = vi.mocked(deliverWebhook).mock.calls[0]!;
     expect(call[2]).toBe('message.received');
     expect(call[3]).toEqual({
+      // F2.42: a conta de origem do evento, pelo id publico (acc_...).
+      account_id: await accountIdPublico('tA'),
       chat_id: 'chat-9',
       message_id: 'msg-9',
       text: 'oi, tudo bem?',
@@ -419,6 +445,152 @@ describe('POST /hooks/message-received', () => {
       { 'x-hook-secret': MESSAGE_SECRET },
     );
     expect(res.status).toBe(200);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(deliverWebhook).not.toHaveBeenCalled();
+  });
+});
+
+describe('webhooks por evento (F2.43)', () => {
+  it('so os webhooks que assinam o evento recebem, cada um com o seu secret', async () => {
+    db.webhooks = [
+      hook('tA', 'https://a.example/tudo'),
+      hook('tA', 'https://a.example/so-conexao', ['account.disconnected']),
+      hook('tA', 'https://a.example/lidas', ['message.read', 'message.received']),
+      // Outro tenant assinando o mesmo evento nunca recebe o evento de tA.
+      hook('tB', 'https://b.example/hook'),
+    ];
+    const res = await post(
+      '/hooks/message-received',
+      { account_id: 'ua-1', event: 'message_received', chat_id: 'c', message: 'oi' },
+      { 'x-hook-secret': MESSAGE_SECRET },
+    );
+    expect(res.status).toBe(200);
+    await vi.waitFor(() => expect(deliverWebhook).toHaveBeenCalledTimes(2));
+    await new Promise((r) => setTimeout(r, 10));
+    const chamadas = vi.mocked(deliverWebhook).mock.calls;
+    expect(chamadas.map((x) => x[0]).sort()).toEqual([
+      'https://a.example/lidas',
+      'https://a.example/tudo',
+    ]);
+    expect(chamadas.every((x) => x[1] === 'lk_whsec_tA')).toBe(true);
+  });
+
+  it('reacao: sai como message.reaction com quem reagiu, sem campo interno', async () => {
+    db.webhooks = [hook('tA', 'https://a.example/reacao', ['message.reaction'])];
+    const res = await post(
+      '/hooks/message-received',
+      {
+        account_id: 'ua-1',
+        event: 'message_reaction',
+        chat_id: 'chat-1',
+        message_id: 'msg-1',
+        timestamp: '2026-09-22T10:00:00.000Z',
+        reaction: '👍',
+        reaction_sender: { attendee_provider_id: 'prov-2', attendee_name: 'Beltrana', attendee_id: 'interno' },
+      },
+      { 'x-hook-secret': MESSAGE_SECRET },
+    );
+    expect(res.status).toBe(200);
+    await vi.waitFor(() => expect(deliverWebhook).toHaveBeenCalledTimes(1));
+    const call = vi.mocked(deliverWebhook).mock.calls[0]!;
+    expect(call[2]).toBe('message.reaction');
+    expect(call[3]).toEqual({
+      account_id: await accountIdPublico('tA'),
+      chat_id: 'chat-1',
+      message_id: 'msg-1',
+      timestamp: '2026-09-22T10:00:00.000Z',
+      reaction: '👍',
+      attendee_provider_id: 'prov-2',
+      sender_name: 'Beltrana',
+    });
+    expect(JSON.stringify(call[3])).not.toContain('interno');
+  });
+
+  it.each([
+    ['message_read', 'message.read'],
+    ['message_edited', 'message.edited'],
+    ['message_deleted', 'message.deleted'],
+    ['message_delivered', 'message.delivered'],
+  ])('%s vira %s', async (origem, nosso) => {
+    db.webhooks = [hook('tA', 'https://a.example/h', [nosso])];
+    await post(
+      '/hooks/message-received',
+      { account_id: 'ua-1', event: origem, chat_id: 'c', message_id: 'm' },
+      { 'x-hook-secret': MESSAGE_SECRET },
+    );
+    await vi.waitFor(() => expect(deliverWebhook).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(deliverWebhook).mock.calls[0]![2]).toBe(nosso);
+  });
+
+  it('evento de mensagem desconhecido: 200 ignored, nada entregue', async () => {
+    const res = await post(
+      '/hooks/message-received',
+      { account_id: 'ua-1', event: 'message_teleported', chat_id: 'c' },
+      { 'x-hook-secret': MESSAGE_SECRET },
+    );
+    expect(await res.json()).toEqual({ ok: true, ignored: true });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(deliverWebhook).not.toHaveBeenCalled();
+  });
+
+  it('webhook que nao assina o evento nao recebe nada', async () => {
+    db.webhooks = [hook('tA', 'https://a.example/h', ['account.disconnected'])];
+    await post(
+      '/hooks/message-received',
+      { account_id: 'ua-1', chat_id: 'c', message: 'oi' },
+      { 'x-hook-secret': MESSAGE_SECRET },
+    );
+    await new Promise((r) => setTimeout(r, 10));
+    expect(deliverWebhook).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /hooks/relation (F2.43)', () => {
+  const novaConexao = {
+    event: 'new_relation',
+    account_id: 'ua-1',
+    account_type: 'LINKEDIN',
+    webhook_name: 'interno-da-origem',
+    user_full_name: 'Ciclana Souza',
+    user_provider_id: 'ACoAA123',
+    user_public_identifier: 'ciclana-souza',
+    user_profile_url: 'https://www.linkedin.com/in/ciclana-souza',
+    user_picture_url: 'https://media.licdn.com/x.jpg',
+  };
+
+  it('convite aceito: entrega relation.new com a whitelist e o NOSSO account_id', async () => {
+    db.webhooks = [hook('tA', 'https://a.example/rede', ['relation.new'])];
+    const res = await post('/hooks/relation', novaConexao, { 'x-hook-secret': USERS_SECRET });
+    expect(res.status).toBe(200);
+    await vi.waitFor(() => expect(deliverWebhook).toHaveBeenCalledTimes(1));
+    const call = vi.mocked(deliverWebhook).mock.calls[0]!;
+    expect(call[2]).toBe('relation.new');
+    expect(call[3]).toEqual({
+      account_id: await accountIdPublico('tA'),
+      provider_id: 'ACoAA123',
+      public_identifier: 'ciclana-souza',
+      name: 'Ciclana Souza',
+      profile_url: 'https://www.linkedin.com/in/ciclana-souza',
+      picture_url: 'https://media.licdn.com/x.jpg',
+    });
+    const serialized = JSON.stringify(call[3]);
+    expect(serialized).not.toContain('ua-1');
+    expect(serialized).not.toContain('interno-da-origem');
+  });
+
+  it('secret de outro hook nao serve', async () => {
+    const res = await post('/hooks/relation', novaConexao, { 'x-hook-secret': MESSAGE_SECRET });
+    expect(res.status).toBe(401);
+  });
+
+  it('conta pausada nao repassa', async () => {
+    db.webhooks = [hook('tC', 'https://c.example/rede', ['relation.new'])];
+    const res = await post(
+      '/hooks/relation',
+      { ...novaConexao, account_id: 'ua-3' },
+      { 'x-hook-secret': USERS_SECRET },
+    );
+    expect(await res.json()).toEqual({ ok: true, ignored: true });
     await new Promise((r) => setTimeout(r, 10));
     expect(deliverWebhook).not.toHaveBeenCalled();
   });
@@ -451,7 +623,7 @@ describe('POST /hooks/billing', () => {
   });
 
   it('F2.20: pagamento confirmado manda UM e-mail de boas-vindas com link de uso unico', async () => {
-    db.tenants.tP = { webhook_url: null, webhook_secret: null, contact_email: 'p@example.com' };
+    db.tenants.tP = { contact_email: 'p@example.com' };
     db.billing.push({ tenant_id: 'tP', asaas_subscription_id: 'sub_P', status: 'pending' });
 
     const primeira = await post(
@@ -480,7 +652,7 @@ describe('POST /hooks/billing', () => {
   });
 
   it('Pix Automatico: 1a cobranca (assinatura nova) acha o tenant pelo CLIENTE nosso e grava a assinatura', async () => {
-    db.tenants.tK = { webhook_url: null, webhook_secret: null };
+    db.tenants.tK = {};
     db.billing.push({
       tenant_id: 'tK',
       asaas_subscription_id: null,
@@ -503,7 +675,7 @@ describe('POST /hooks/billing', () => {
   });
 
   it('F2.25 cartao: 1a cobranca acha o tenant pela SESSAO de checkout e grava assinatura + cliente', async () => {
-    db.tenants.tCard = { webhook_url: null, webhook_secret: null };
+    db.tenants.tCard = {};
     db.billing.push({
       tenant_id: 'tCard',
       asaas_subscription_id: null,
@@ -530,7 +702,7 @@ describe('POST /hooks/billing', () => {
   });
 
   it('F2.25 cartao: CHECKOUT_PAID ativa pela sessao e grava a assinatura da cobranca dela', async () => {
-    db.tenants.tCard2 = { webhook_url: null, webhook_secret: null };
+    db.tenants.tCard2 = {};
     db.billing.push({
       tenant_id: 'tCard2',
       asaas_subscription_id: null,
@@ -567,7 +739,7 @@ describe('POST /hooks/billing', () => {
   });
 
   it('#2 cartao: cobranca sem checkoutSession no payload acha a sessao pelo Asaas', async () => {
-    db.tenants.tCard3 = { webhook_url: null, webhook_secret: null };
+    db.tenants.tCard3 = {};
     db.billing.push({
       tenant_id: 'tCard3',
       asaas_subscription_id: null,
@@ -733,7 +905,7 @@ describe('POST /hooks/billing', () => {
   });
 
   it('M1: envio que falha devolve a vez; o proximo pagamento confirmado tenta de novo', async () => {
-    db.tenants.tQ = { webhook_url: null, webhook_secret: null, contact_email: 'q@example.com' };
+    db.tenants.tQ = { contact_email: 'q@example.com' };
     db.billing.push({ tenant_id: 'tQ', asaas_subscription_id: 'sub_Q', status: 'pending' });
     vi.mocked(sendEmail).mockResolvedValueOnce(false);
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -880,8 +1052,8 @@ describe('POST /hooks/billing', () => {
 // quem nao pagou com conta, entao o cliente so decide quando nao ha duvida.
 describe('POST /hooks/billing, dois assentos do mesmo cliente (F2.29)', () => {
   beforeEach(() => {
-    db.tenants.tS1 = { webhook_url: null, webhook_secret: null };
-    db.tenants.tS2 = { webhook_url: null, webhook_secret: null };
+    db.tenants.tS1 = {};
+    db.tenants.tS2 = {};
     db.accounts.push(
       { id: 'ca-s1', tenant_id: 'tS1', unipile_account_id: 'ua-s1', status: 'active' },
       { id: 'ca-s2', tenant_id: 'tS2', unipile_account_id: 'ua-s2', status: 'active' },
@@ -986,8 +1158,8 @@ describe('POST /hooks/billing, dois assentos do mesmo cliente (F2.29)', () => {
 // "ambiguidade". Dinheiro entrando e assento nunca ativado, sem reprocesso.
 describe('POST /hooks/billing, linha cancelada do mesmo cliente (F2.31)', () => {
   it('checkout refeito: a linha canceled nao torna o pagamento ambiguo', async () => {
-    db.tenants.tR1 = { webhook_url: null, webhook_secret: null };
-    db.tenants.tR2 = { webhook_url: null, webhook_secret: null };
+    db.tenants.tR1 = {};
+    db.tenants.tR2 = {};
     db.accounts.push({ id: 'ca-r2', tenant_id: 'tR2', unipile_account_id: 'ua-r2', status: 'active' });
     db.billing.push(
       // Tentativa abandonada: mesmo cliente no Asaas, sem assinatura.
@@ -1022,8 +1194,8 @@ describe('POST /hooks/billing, linha cancelada do mesmo cliente (F2.31)', () => 
   });
 
   it('ambiguidade de verdade: o sinal leva os tenants, para dar para reconciliar', async () => {
-    db.tenants.tR3 = { webhook_url: null, webhook_secret: null };
-    db.tenants.tR4 = { webhook_url: null, webhook_secret: null };
+    db.tenants.tR3 = {};
+    db.tenants.tR4 = {};
     db.billing.push(
       {
         tenant_id: 'tR3',
@@ -1068,7 +1240,7 @@ describe('POST /hooks/billing, linha cancelada do mesmo cliente (F2.31)', () => 
 // pago vale ate o fim.
 describe('POST /hooks/billing, assinatura cancelada (F2.37)', () => {
   beforeEach(() => {
-    db.tenants.tCan = { webhook_url: null, webhook_secret: null };
+    db.tenants.tCan = {};
     db.accounts.push({
       id: 'ca-can',
       tenant_id: 'tCan',

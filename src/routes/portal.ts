@@ -16,6 +16,20 @@ import {
 } from '../lib/asaas';
 import { isValidWebhookUrl } from './selfservice';
 import {
+  createWebhook,
+  deleteLegacy,
+  deleteWebhook,
+  getLegacyUrl,
+  isWebhookId,
+  listWebhooks,
+  MAX_WEBHOOKS_PER_TENANT,
+  parseEvents,
+  parseName,
+  putLegacy,
+  WEBHOOK_EVENTS,
+} from '../lib/clientWebhooks';
+import { accountIdPublico } from '../lib/contas';
+import {
   resolvePortalToken,
   exchangeLinkToken,
   createConnectLink,
@@ -223,7 +237,11 @@ portal.get('/status', async (c) => {
       linkedin: linkedinState(contas).state,
       has_key: chaves.length > 0,
       limits: s.limits,
-      usage_today: { messages: usado('messages'), invitations: usado('invitations') },
+      // Uma chave por acao com limite (F2.41): o painel le messages e
+      // invitations; as demais vem junto para quem quiser mostrar.
+      usage_today: Object.fromEntries(
+        Object.keys(s.limits).map((acao) => [acao, usado(acao)]),
+      ),
       docs_url: `${new URL(c.req.url).origin}/docs`,
       email_login: emailConfigured(c.env),
     },
@@ -373,19 +391,70 @@ portal.post('/key', async (c) => {
   }
 });
 
-// Webhook do cliente pelo painel (F2.26): o mesmo que PUT/GET/DELETE
-// /v1/webhook, para quem prefere configurar pela tela, como no dashboard da
-// Unipile. Mesma validacao anti-SSRF (so https:443, sem IP literal nem nome
-// interno); o secret de assinatura aparece UMA vez e nunca e reexibido.
+// Webhooks do cliente pelo painel, por evento (F2.43), como no dashboard da
+// Unipile: a conta tem uma lista de webhooks, cada um com nome, eventos e URL.
+// Mesma validacao anti-SSRF do /v1/webhook (so https:443, sem IP literal nem
+// nome interno); o secret de cada webhook aparece UMA vez, na criacao.
+//
+//   GET    /portal/webhooks      lista (nunca o secret)
+//   POST   /portal/webhooks      cria { name, url, events[] }
+//   DELETE /portal/webhooks/:id  remove um webhook desta conta
+portal.get('/webhooks', async (c) => {
+  const s = await gate(c);
+  if (s instanceof Response) return s;
+  const webhooks = await listWebhooks(c.env, s.tenantId);
+  return c.json({
+    ok: true,
+    data: { webhooks, events: WEBHOOK_EVENTS, max: MAX_WEBHOOKS_PER_TENANT },
+  });
+});
+
+portal.post('/webhooks', async (c) => {
+  const s = await gate(c);
+  if (s instanceof Response) return s;
+  const body = await lerCorpo(c);
+  const name = parseName(body?.name);
+  if (!name) return c.json({ error: 'invalid_name' }, 400);
+  const events = parseEvents(body?.events);
+  if (!events) return c.json({ error: 'invalid_events' }, 400);
+  const url = body?.url;
+  if (typeof url !== 'string' || !isValidWebhookUrl(url)) {
+    return c.json({ error: 'invalid_url' }, 400);
+  }
+  const trocas = await bumpAttempts(c.env.RATE_LIMIT, attemptKey('portal-webhook', s.tenantId));
+  if (trocas > MAX_WEBHOOK_CHANGES_PER_TENANT) {
+    return c.json({ error: 'rate_limited' }, 429);
+  }
+  const criado = await createWebhook(c.env, s.tenantId, { name, url, events });
+  if (criado === 'limit') {
+    return c.json({ error: 'webhook_limit' }, 409);
+  }
+  return c.json({
+    ok: true,
+    data: {
+      ...criado.webhook,
+      secret: criado.secret,
+      note: 'Guarde o secret agora: ele assina cada evento (X-Webhook-Signature) e nao sera exibido de novo.',
+    },
+  });
+});
+
+portal.delete('/webhooks/:id', async (c) => {
+  const s = await gate(c);
+  if (s instanceof Response) return s;
+  const id = c.req.param('id');
+  if (!isWebhookId(id) || !(await deleteWebhook(c.env, s.tenantId, id))) {
+    return c.json({ error: 'webhook_not_found' }, 404);
+  }
+  return c.json({ ok: true, data: { id } });
+});
+
+// Caminho de antes (F2.26), de UM endpoint: segue valendo para o painel que
+// ainda estiver aberto num navegador, e opera no webhook principal.
 portal.get('/webhook', async (c) => {
   const s = await gate(c);
   if (s instanceof Response) return s;
-  const rows = await supabaseSelect<{ webhook_url?: string | null }>(c.env, 'tenants', {
-    id: `eq.${s.tenantId}`,
-    select: 'webhook_url',
-    limit: '1',
-  });
-  const url = rows[0]?.webhook_url ?? null;
+  const url = await getLegacyUrl(c.env, s.tenantId);
   return c.json({ ok: true, data: { url, configured: url !== null } });
 });
 
@@ -401,13 +470,7 @@ portal.put('/webhook', async (c) => {
   if (trocas > MAX_WEBHOOK_CHANGES_PER_TENANT) {
     return c.json({ error: 'rate_limited' }, 429);
   }
-  const secret = `lk_whsec_${randomHex32()}`;
-  await supabaseUpdate(
-    c.env,
-    'tenants',
-    { id: `eq.${s.tenantId}` },
-    { webhook_url: url, webhook_secret: secret },
-  );
+  const secret = await putLegacy(c.env, s.tenantId, url);
   return c.json({
     ok: true,
     data: {
@@ -421,12 +484,7 @@ portal.put('/webhook', async (c) => {
 portal.delete('/webhook', async (c) => {
   const s = await gate(c);
   if (s instanceof Response) return s;
-  await supabaseUpdate(
-    c.env,
-    'tenants',
-    { id: `eq.${s.tenantId}` },
-    { webhook_url: null, webhook_secret: null },
-  );
+  await deleteLegacy(c.env, s.tenantId);
   return c.json({ ok: true, data: { configured: false } });
 });
 
@@ -544,6 +602,8 @@ portal.get('/seats', async (c) => {
         doTenant[0];
       return {
         ref: await seatRef(t.id),
+        // O id que o cliente passa na API para agir por esta conta (F2.42).
+        account_id: await accountIdPublico(t.id),
         current: t.id === s.tenantId,
         position: i + 1,
         label: principal?.label ?? null,

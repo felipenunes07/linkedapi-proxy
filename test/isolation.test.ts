@@ -62,6 +62,7 @@ vi.mock('../src/lib/unipile', () => ({
 import app from '../src/index';
 import { sendMessage } from '../src/lib/unipile';
 import { memoryKV } from './helpers';
+import { accountIdPublico } from '../src/lib/contas';
 
 const env = {
   ENVIRONMENT: 'test',
@@ -120,15 +121,39 @@ describe('isolamento multi-tenant (Marco 2)', () => {
   });
 
   it('chave A NAO age pela conta de B mesmo passando account_id de B no corpo', async () => {
-    const res = await post(KEY_A, {
-      chat_id: 'c1',
-      text: 'oi',
-      account_id: ACCT_B, // tentativa de agir pela conta de B
-      tenant_id: 'tB', // e de se passar por B
-    });
+    // F2.42: account_id no request agora e uma escolha entre as contas do
+    // PROPRIO grupo. O de B (da origem ou o publico) nao e escolha valida
+    // para a chave de A: 404, e a origem nem e chamada.
+    for (const alheio of [ACCT_B, await accountIdPublico('tB')]) {
+      const res = await post(KEY_A, {
+        chat_id: 'c1',
+        text: 'oi',
+        account_id: alheio, // tentativa de agir pela conta de B
+        tenant_id: 'tB', // e de se passar por B
+      });
+      expect(res.status).toBe(404);
+      expect(await res.json()).toEqual({ error: 'account_not_found' });
+    }
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('account_id de B na query tambem nao passa', async () => {
+    const res = await app.request(
+      `/v1/messages?account_id=${await accountIdPublico('tB')}`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'X-API-KEY': KEY_A },
+        body: JSON.stringify({ chat_id: 'c1', text: 'oi' }),
+      },
+      env,
+    );
+    expect(res.status).toBe(404);
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('tenant_id solto no corpo continua ignorado: age pela conta de A', async () => {
+    const res = await post(KEY_A, { chat_id: 'c1', text: 'oi', tenant_id: 'tB' });
     expect(res.status).toBe(200);
-    // O account_id injetado tem que ser o de A, resolvido da chave. Nunca o de B.
     expect(accountUsedInLastCall()).toBe(ACCT_A);
-    expect(accountUsedInLastCall()).not.toBe(ACCT_B);
   });
 });

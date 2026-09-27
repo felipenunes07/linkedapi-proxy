@@ -1,8 +1,9 @@
 import { Hono } from 'hono';
 import type { Env, Variables } from '../types';
-import { supabaseSelect, supabaseInsert, supabaseUpdate } from '../lib/supabase';
+import { supabaseInsert, supabaseUpdate } from '../lib/supabase';
 import { hashApiKey } from '../lib/hash';
 import { randomHex32 } from '../lib/random';
+import { deleteLegacy, getLegacyUrl, putLegacy } from '../lib/clientWebhooks';
 
 // Self-service do tenant (fase 2). Montado DENTRO de /v1, ou seja, atras do
 // authMiddleware: quem chama ja provou posse de uma chave ativa. Nenhum
@@ -12,18 +13,23 @@ import { randomHex32 } from '../lib/random';
 //   PUT    /v1/webhook      registra url https + gera secret de assinatura
 //   GET    /v1/webhook      mostra a configuracao (nunca o secret)
 //   DELETE /v1/webhook      remove url e secret
-
-interface TenantWebhookRow {
-  webhook_url: string | null;
-}
+//
+// Desde o F2.43 a conta pode ter varios webhooks, por evento (painel). As
+// tres rotas acima seguem valendo e operam no webhook mais antigo, o
+// "principal" (ver lib/clientWebhooks.ts).
 
 export const selfservice = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 // Rotacao de chave: cria uma chave nova para o tenant e revoga A CHAVE USADA
 // NESTA CHAMADA (nunca outra: se o tenant tiver mais chaves, elas continuam).
 // O valor novo aparece UMA vez, na resposta; guardamos so o hash.
+//
+// Com `account_id` de outra conta do grupo (F2.42), continua sendo a chave
+// USADA que roda: tudo aqui e do tenant dono da chave (keyTenantId), nunca da
+// conta escolhida.
 selfservice.post('/keys/rotate', async (c) => {
   const tenant = c.get('tenant');
+  const donoDaChave = tenant.keyTenantId;
 
   const apiKey = `lk_live_${randomHex32()}`;
   const keyHash = await hashApiKey(apiKey);
@@ -31,14 +37,14 @@ selfservice.post('/keys/rotate', async (c) => {
   // Ordem importa: cria a nova ANTES de revogar a atual. Se a criacao falhar,
   // a chave velha continua valida (nunca deixar o tenant sem chave).
   await supabaseInsert(c.env, 'api_keys', {
-    tenant_id: tenant.tenantId,
+    tenant_id: donoDaChave,
     key_hash: keyHash,
     status: 'active',
   });
   await supabaseUpdate(
     c.env,
     'api_keys',
-    { key_hash: `eq.${tenant.keyHash}`, tenant_id: `eq.${tenant.tenantId}` },
+    { key_hash: `eq.${tenant.keyHash}`, tenant_id: `eq.${donoDaChave}` },
     { status: 'revoked' },
   );
 
@@ -94,13 +100,7 @@ selfservice.put('/webhook', async (c) => {
     return c.json({ error: 'invalid_url' }, 400);
   }
 
-  const secret = `lk_whsec_${randomHex32()}`;
-  await supabaseUpdate(
-    c.env,
-    'tenants',
-    { id: `eq.${tenant.tenantId}` },
-    { webhook_url: url, webhook_secret: secret },
-  );
+  const secret = await putLegacy(c.env, tenant.tenantId, url);
 
   // Resposta carrega segredo: nunca cachear.
   c.header('Cache-Control', 'no-store');
@@ -116,22 +116,12 @@ selfservice.put('/webhook', async (c) => {
 
 selfservice.get('/webhook', async (c) => {
   const tenant = c.get('tenant');
-  const rows = await supabaseSelect<TenantWebhookRow>(c.env, 'tenants', {
-    id: `eq.${tenant.tenantId}`,
-    select: 'webhook_url',
-    limit: '1',
-  });
-  const url = rows[0]?.webhook_url ?? null;
+  const url = await getLegacyUrl(c.env, tenant.tenantId);
   return c.json({ ok: true, data: { url, configured: url !== null } });
 });
 
 selfservice.delete('/webhook', async (c) => {
   const tenant = c.get('tenant');
-  await supabaseUpdate(
-    c.env,
-    'tenants',
-    { id: `eq.${tenant.tenantId}` },
-    { webhook_url: null, webhook_secret: null },
-  );
+  await deleteLegacy(c.env, tenant.tenantId);
   return c.json({ ok: true, data: { configured: false } });
 });

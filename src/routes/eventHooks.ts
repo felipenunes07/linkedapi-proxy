@@ -7,6 +7,8 @@ import { asRecord, pickString } from '../lib/sanitize';
 import { getAccount } from '../lib/unipile';
 import { createConnectLink, enviarBoasVindas } from '../lib/portal';
 import { deliverWebhook } from '../lib/webhooks';
+import { webhooksDoEvento, type WebhookEvent } from '../lib/clientWebhooks';
+import { accountIdPublico } from '../lib/contas';
 import {
   enableCustomerNotifications,
   getPayment,
@@ -18,7 +20,7 @@ import { statusAoReativar } from '../lib/billing';
 import { fireAndForget } from '../lib/async';
 import { attemptKey, bumpAttempts } from '../lib/throttle';
 
-// Hooks de evento (fase 2). Tres rotas publicas, todas atras de secret
+// Hooks de evento (fase 2). Quatro rotas publicas, todas atras de secret
 // compartilhado configurado na origem (fail-closed: sem o secret no env, a
 // rota responde 500 e nada e processado):
 //
@@ -26,8 +28,11 @@ import { attemptKey, bumpAttempts } from '../lib/throttle';
 //                                por webhook:register). Sessao caiu -> conta
 //                                vira disconnected + notifica o tenant com um
 //                                link de reconexao; voltou -> active.
-//   POST /hooks/message-received mensagem nova na origem -> repassa ao webhook
-//                                do tenant, sanitizada e assinada (HMAC).
+//   POST /hooks/message-received eventos de mensagem da origem (nova, lida,
+//                                reacao, editada, apagada, entregue) -> repassa
+//                                aos webhooks do tenant que assinam aquele
+//                                evento, sanitizado e assinado (HMAC).
+//   POST /hooks/relation         conexao nova (convite aceito) -> idem.
 //   POST /hooks/billing          eventos de cobranca (Asaas). Pagamento em
 //                                atraso PAUSA as contas do tenant (nunca
 //                                deleta); pagamento confirmado despausa.
@@ -45,12 +50,6 @@ interface AccountRow {
   unipile_account_id: string;
 }
 
-interface TenantWebhookRow {
-  id: string;
-  webhook_url: string | null;
-  webhook_secret: string | null;
-}
-
 interface BillingRow {
   tenant_id: string;
   asaas_customer_id?: string | null;
@@ -61,10 +60,13 @@ interface BillingRow {
 // Tetos de tentativa (janela diaria UTC, mesmos contadores KV do /hooks/connect).
 // Por IP alto: os egress da origem concentram trafego legitimo (mensagens).
 // Por entidade (conta/assinatura) segura loop de abuso com secret comprometido.
-const HOOK_IP_DAILY_LIMIT = 5000;
+// F2.43: o hook de mensagens passou a receber tambem lida/entregue/reacao/
+// edicao/remocao (varios eventos por mensagem), dai os tetos maiores.
+const HOOK_IP_DAILY_LIMIT = 20000;
 const ENTITY_DAILY_LIMITS = {
   'status-acct': 50, // mudancas de status de sessao por conta/dia
-  'msg-acct': 2000, // mensagens recebidas por conta/dia
+  'msg-acct': 8000, // eventos de mensagem por conta/dia
+  'relation-acct': 500, // conexoes novas por conta/dia
   'billing-sub': 50, // eventos de cobranca por assinatura/dia
 } as const;
 
@@ -124,25 +126,30 @@ async function readJson(c: Ctx): Promise<unknown | Response> {
   }
 }
 
-// Entrega um evento ao webhook do tenant, se configurado. Best-effort.
-// Tenant suspenso nao recebe evento (filtro status=active).
+// Entrega um evento a cada webhook do tenant que o assina (F2.43). Best-effort
+// e em paralelo: um endpoint lento do cliente nao atrasa os outros.
+// Tenant suspenso nao recebe evento (filtro status=active). Todo evento leva
+// o `account_id` publico da conta (F2.42): quem aponta o webhook de varias
+// contas para a mesma URL sabe de qual delas veio cada evento.
 async function notifyTenant(
   env: Env,
   tenantId: string,
-  eventType: string,
+  eventType: WebhookEvent,
   payload: Record<string, unknown>,
 ): Promise<void> {
-  const rows = await supabaseSelect<TenantWebhookRow>(env, 'tenants', {
+  const rows = await supabaseSelect<{ id: string }>(env, 'tenants', {
     id: `eq.${tenantId}`,
     status: 'eq.active',
-    select: 'id,webhook_url,webhook_secret',
+    select: 'id',
     limit: '1',
   });
-  const tenant = rows[0];
-  if (!tenant?.webhook_url || !tenant.webhook_secret) {
-    return;
-  }
-  await deliverWebhook(tenant.webhook_url, tenant.webhook_secret, eventType, payload);
+  if (!rows[0]) return;
+  const hooks = await webhooksDoEvento(env, tenantId, eventType);
+  if (hooks.length === 0) return;
+  const corpo = { account_id: await accountIdPublico(tenantId), ...payload };
+  await Promise.all(
+    hooks.map((h) => deliverWebhook(h.url, h.secret, eventType, corpo)),
+  );
 }
 
 // Reconexao automatizada: gera um link de reconexao (mesmo desenho do
@@ -262,6 +269,30 @@ eventHooks.post('/account-status', async (c) => {
   return c.json({ ok: true });
 });
 
+// Conta ATIVA da origem, resolvida no banco. Desconhecida ou fora de operacao
+// (pausada por inadimplencia, desconectada): nada e repassado ao cliente.
+async function contaAtiva(c: Ctx, accountId: string): Promise<AccountRow | null> {
+  const rows = await supabaseSelect<AccountRow>(c.env, 'connected_accounts', {
+    unipile_account_id: `eq.${accountId}`,
+    select: 'id,tenant_id,status,unipile_account_id',
+    limit: '1',
+  });
+  const account = rows[0];
+  return account && account.status === 'active' ? account : null;
+}
+
+// Evento de mensagem da origem -> o nosso. O webhook `messaging` da origem
+// manda todos para a mesma URL e diz qual e em `event`. Sem `event` e
+// message_received: era o unico que o registro de antes pedia.
+const MESSAGE_EVENTS: Record<string, WebhookEvent> = {
+  message_received: 'message.received',
+  message_read: 'message.read',
+  message_reaction: 'message.reaction',
+  message_edited: 'message.edited',
+  message_deleted: 'message.deleted',
+  message_delivered: 'message.delivered',
+};
+
 eventHooks.post('/message-received', async (c) => {
   const denied = await gate(c, 'x-hook-secret', c.env.MESSAGE_HOOK_SECRET);
   if (denied) return denied;
@@ -274,37 +305,91 @@ eventHooks.post('/message-received', async (c) => {
   if (!accountId) {
     return c.json({ error: 'invalid_payload' }, 400);
   }
+  const tipo = MESSAGE_EVENTS[pickString(event, 'event') ?? 'message_received'];
+  if (!tipo) {
+    return c.json({ ok: true, ignored: true });
+  }
   if (await entityThrottled(c, 'msg-acct', accountId)) {
     return c.json({ error: 'rate_limited' }, 429);
   }
 
-  const rows = await supabaseSelect<AccountRow>(c.env, 'connected_accounts', {
-    unipile_account_id: `eq.${accountId}`,
-    select: 'id,tenant_id,status,unipile_account_id',
-    limit: '1',
-  });
-  const account = rows[0];
-  // Conta desconhecida ou fora de operacao (pausada por inadimplencia,
-  // desconectada): nada e repassado ao cliente.
-  if (!account || account.status !== 'active') {
+  const account = await contaAtiva(c, accountId);
+  if (!account) {
     return c.json({ ok: true, ignored: true });
   }
 
   // Whitelist (mesma disciplina do sanitize.ts): nada de account_id nem campos
-  // internos da origem no evento que sai para o cliente.
-  const sender = asRecord(event.sender);
-  const payload = {
+  // internos da origem no evento que sai para o cliente. A base e comum a
+  // todos; cada tipo acrescenta so o que e dele.
+  const base = {
     chat_id: pickString(event, 'chat_id'),
     message_id: pickString(event, 'message_id'),
-    text: pickString(event, 'message'),
-    attendee_provider_id: pickString(sender, 'attendee_provider_id'),
-    sender_name: pickString(sender, 'attendee_name'),
     timestamp: pickString(event, 'timestamp'),
   };
+  let payload: Record<string, unknown> = base;
+  if (tipo === 'message.received') {
+    const sender = asRecord(event.sender);
+    payload = {
+      chat_id: base.chat_id,
+      message_id: base.message_id,
+      text: pickString(event, 'message'),
+      attendee_provider_id: pickString(sender, 'attendee_provider_id'),
+      sender_name: pickString(sender, 'attendee_name'),
+      timestamp: base.timestamp,
+    };
+  } else if (tipo === 'message.reaction') {
+    const quem = asRecord(event.reaction_sender);
+    payload = {
+      ...base,
+      reaction: pickString(event, 'reaction'),
+      attendee_provider_id: pickString(quem, 'attendee_provider_id'),
+      sender_name: pickString(quem, 'attendee_name'),
+    };
+  } else if (tipo === 'message.edited') {
+    payload = { ...base, text: pickString(event, 'message') };
+  }
 
-  fireAndForget(c, () =>
-    notifyTenant(c.env, account.tenant_id, 'message.received', payload),
-  );
+  fireAndForget(c, () => notifyTenant(c.env, account.tenant_id, tipo, payload));
+
+  return c.json({ ok: true });
+});
+
+// Conexao nova no LinkedIn (F2.43): alguem aceitou o convite da conta. Vem do
+// webhook `users` da origem (evento new_relation), que NAO e em tempo real: a
+// origem consulta a rede em intervalos, e o evento pode chegar horas depois.
+eventHooks.post('/relation', async (c) => {
+  const denied = await gate(c, 'x-hook-secret', c.env.USERS_HOOK_SECRET);
+  if (denied) return denied;
+
+  const body = await readJson(c);
+  if (body instanceof Response) return body;
+
+  const event = asRecord(body);
+  const accountId = pickString(event, 'account_id');
+  if (!accountId) {
+    return c.json({ error: 'invalid_payload' }, 400);
+  }
+  if ((pickString(event, 'event') ?? 'new_relation') !== 'new_relation') {
+    return c.json({ ok: true, ignored: true });
+  }
+  if (await entityThrottled(c, 'relation-acct', accountId)) {
+    return c.json({ error: 'rate_limited' }, 429);
+  }
+
+  const account = await contaAtiva(c, accountId);
+  if (!account) {
+    return c.json({ ok: true, ignored: true });
+  }
+
+  const payload = {
+    provider_id: pickString(event, 'user_provider_id'),
+    public_identifier: pickString(event, 'user_public_identifier'),
+    name: pickString(event, 'user_full_name'),
+    profile_url: pickString(event, 'user_profile_url'),
+    picture_url: pickString(event, 'user_picture_url'),
+  };
+
+  fireAndForget(c, () => notifyTenant(c.env, account.tenant_id, 'relation.new', payload));
 
   return c.json({ ok: true });
 });

@@ -1,7 +1,7 @@
 import type { Env, Tenant } from '../types';
 import { supabaseSelect, supabaseUpdate } from './supabase';
 import { hashApiKey } from './hash';
-import { DAILY_LIMITS } from './limits';
+import { effectiveLimits } from './limits';
 
 // Re-exportado por compatibilidade: o hash agora vive em ./hash (compartilhado
 // com o script de emissao de chave). Quem ja importava hashApiKey daqui continua
@@ -12,6 +12,11 @@ export { hashApiKey };
 // a unica origem legitima do account_id e a cadeia
 //   API key -> api_keys.tenant_id -> connected_accounts.unipile_account_id
 // NUNCA o request do cliente.
+//
+// F2.42: o cliente pode ESCOLHER entre as contas do proprio grupo com o nosso
+// `account_id` publico (acc_..., ver lib/contas). A escolha e so um ponteiro
+// para um assento que o servidor confere ser do grupo da chave; o id da
+// origem continua saindo desta cadeia, nunca do request.
 //
 // Marco 2: implementado contra o Supabase (PostgREST + service role).
 // - hasheia a apiKey recebida e busca em api_keys (status ativo)
@@ -42,6 +47,7 @@ interface ConnectedAccountRow {
 export type TenantResolution =
   | { tenant: Tenant }
   | { error: 'invalid_api_key'; status: 401 }
+  | { error: 'account_not_found'; status: 404 }
   | { error: 'account_paused'; status: 402 }
   | { error: 'account_disconnected' | 'linkedin_not_connected'; status: 409 };
 
@@ -84,6 +90,25 @@ export async function resolveTenantDetailed(
   env: Env,
   apiKey: string,
 ): Promise<TenantResolution> {
+  const chave = await autenticarChave(env, apiKey);
+  if (!chave) {
+    return CHAVE_INVALIDA;
+  }
+  return resolverContaDoTenant(env, chave.tenantId, chave, chave.tenantRow);
+}
+
+// Chave valida de tenant ativo. E a primeira metade da cadeia: quem e o dono
+// da chave. A conta com que a request age sai de resolverContaDoTenant.
+export interface ChaveAutenticada {
+  tenantId: string;
+  keyHash: string;
+  tenantRow: TenantRow;
+}
+
+export async function autenticarChave(
+  env: Env,
+  apiKey: string,
+): Promise<ChaveAutenticada | null> {
   const keyHash = await hashApiKey(apiKey);
 
   // Chave -> tenant. Guardamos so o hash; comparamos por hash.
@@ -95,23 +120,47 @@ export async function resolveTenantDetailed(
   });
   const tenantId = keys[0]?.tenant_id;
   if (!tenantId) {
-    return CHAVE_INVALIDA;
+    return null;
   }
 
   // Tenant ativo? Uma chave valida de um tenant suspenso nao age. Suspender o
   // tenant (status != active) passa a ter efeito imediato, sem precisar mexer
   // em cada connected_account. Aproveita a query para carregar os overrides de
   // limite do plano (fase 2; NULL = default do plano basico).
+  const tenantRow = await tenantAtivo(env, tenantId);
+  if (!tenantRow) {
+    return null;
+  }
+  return { tenantId, keyHash, tenantRow };
+}
+
+async function tenantAtivo(env: Env, tenantId: string): Promise<TenantRow | null> {
   const tenants = await supabaseSelect<TenantRow>(env, 'tenants', {
     id: `eq.${tenantId}`,
     status: 'eq.active',
     select: 'id,daily_message_limit,daily_invitation_limit',
     limit: '1',
   });
-  const tenantRow = tenants[0];
-  if (!tenantRow) {
-    return CHAVE_INVALIDA;
+  return tenants[0] ?? null;
+}
+
+// Segunda metade: a conta LinkedIn com que a request age. Normalmente e a do
+// dono da chave. Com `account_id` no request (F2.42), e a de outro assento do
+// MESMO grupo, que lib/contas ja conferiu antes de chegar aqui: esta funcao
+// nunca recebe um tenant escolhido pelo cliente sem essa conferencia.
+// `tenantRow` evita reler o tenant quando ja veio da autenticacao.
+export async function resolverContaDoTenant(
+  env: Env,
+  tenantId: string,
+  chave: { tenantId: string; keyHash: string },
+  tenantRow?: TenantRow,
+): Promise<TenantResolution> {
+  const linha =
+    tenantRow && tenantRow.id === tenantId ? tenantRow : await tenantAtivo(env, tenantId);
+  if (!linha) {
+    return { error: 'account_not_found', status: 404 };
   }
+  const keyHash = chave.keyHash;
 
   // Tenant -> account_id. Filtra por tenant_id no codigo (defesa em
   // profundidade), mesmo a service role contornando a RLS. Ordena por
@@ -139,11 +188,10 @@ export async function resolveTenantDetailed(
     tenant: {
       tenantId,
       unipileAccountId,
-      limits: {
-        messages: tenantRow.daily_message_limit ?? DAILY_LIMITS.messages,
-        invitations: tenantRow.daily_invitation_limit ?? DAILY_LIMITS.invitations,
-      },
+      limits: effectiveLimits(linha),
       keyHash,
+      keyTenantId: chave.tenantId,
+      accountIdEscolhido: null,
     },
   };
 }

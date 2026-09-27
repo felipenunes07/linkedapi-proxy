@@ -6,7 +6,7 @@ item destravar, o roteiro executavel esta em [go-live.md](go-live.md). O
 recorte so das acoes que exigem mao humana (quem faz, como, o que destrava)
 esta em [../ACOES-HUMANAS.md](../ACOES-HUMANAS.md).
 
-Atualizado em 2026-09-10.
+Atualizado em 2026-09-22.
 
 ## Bloqueia tudo - RESOLVIDO (2026-09-01)
 
@@ -60,6 +60,42 @@ Atualizado em 2026-09-10.
 - [x] Pix Automatico habilitado na conta Asaas de producao (API 200, 2026-09-10).
 - [ ] Resend (opcional): boas-vindas e "entrar" por e-mail.
 
+## Todos os endpoints de LinkedIn (F2.41) - codigo pronto e validado
+
+- [ ] **Aplicar a migration 0013** (`supabase/migrations/0013_acoes_linkedin.sql`)
+      no SQL Editor. Sem ela o historico de uso (`usage_daily`) das acoes novas
+      falha em silencio (best-effort) e o painel mostra zero nelas. O rate
+      limit NAO depende disso (vive no KV).
+- [ ] **Deploy do Worker** (`npm run deploy`) depois da migration.
+- [ ] **Primeira escrita com efeito real** de cada familia nova (iniciar
+      conversa, publicar, comentar, reagir, endossar, aceitar/cancelar convite,
+      editar/apagar mensagem), com autorizacao do dono e numa conta da equipe.
+      No E2E de 2026-09-22 so rodaram leituras e escritas com id inexistente.
+- [ ] Conferir o formato de `mentions` da origem antes de aceitar mencao em
+      post/comentario (ficou fora do F2.41 por nao dar para provar sem publicar).
+- Medido no real: cancelar/recusar convite inexistente e reagir a post
+  inexistente respondem 200 na origem (no-op). A doc avisa no cancelamento.
+
+## Webhooks por evento (F2.43) - codigo pronto
+
+- [ ] **Aplicar a migration 0014** (`supabase/migrations/0014_webhooks_por_evento.sql`)
+      ANTES do deploy: o Worker novo so le `client_webhooks`. Ela copia o
+      endpoint de cada tenant como "Webhook principal". Conferir depois:
+      `select count(*) from client_webhooks` = tenants com `webhook_url`.
+- [ ] **Deploy do Worker** logo depois da migration (troca de URL feita pelo
+      Worker antigo nesse intervalo nao chega a tabela).
+- [ ] **Re-registrar o webhook `messaging` na Unipile**: apagar o
+      `linkedapi-message-received` no dashboard dela e rodar
+      `npm run webhook:register -- messaging` (agora pede os 6 eventos).
+- [ ] **Registrar o webhook `users`**: gerar `USERS_HOOK_SECRET`, gravar no
+      `.dev.vars` e em producao (`npx wrangler secret put USERS_HOOK_SECRET`),
+      rodar `npm run webhook:register -- users`.
+- [ ] Payload real dos eventos novos: `message_read`, `message_edited`,
+      `message_deleted`, `message_delivered` e `new_relation` (a whitelist segue
+      a doc da origem; reacao le `reaction` e `reaction_sender.*`).
+- [ ] Migration de limpeza: apagar `tenants.webhook_url`/`webhook_secret`
+      depois que a 0014 estiver no ar e conferida.
+
 ## Negocio / juridico (acao do dono)
 
 - [ ] Registrar `linkedapi.com.br` e apontar o custom domain (trocar o server
@@ -101,8 +137,8 @@ Atualizado em 2026-09-10.
       nas agregacoes de /admin (PostgREST corta em 1000 linhas em silencio);
       ~~distinguir 401 de conta desconectada/pausada~~ FEITO no F2.22
       (402 account_paused, 409 account_disconnected/linkedin_not_connected); teto de
-      chaves ativas por tenant na rotacao; mover webhook_url/secret para tabela
-      propria (hoje em tenants; qualquer select:* futuro ali vazaria o secret).
+      chaves ativas por tenant na rotacao; ~~mover webhook_url/secret para
+      tabela propria~~ FEITO no F2.43 (`client_webhooks`).
 
 ## Cartao recorrente + Vercel (F2.25/F2.26)
 

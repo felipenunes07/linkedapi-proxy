@@ -115,7 +115,9 @@ export async function supabaseRpcSelect<T>(
 // DELETE com filtros PostgREST. Uso restrito a limpeza de registro que acabou
 // de ser criado e nao chegou a valer (ex.: tenant de um checkout cujo cartao
 // foi recusado). Regra do PRD: nada que ja teve vida util e deletado; para
-// esses casos o caminho e mudar o status.
+// esses casos o caminho e mudar o status. Excecao de configuracao: o webhook
+// que o proprio cliente remove (client_webhooks, F2.43), como antes a URL ia
+// para null.
 export async function supabaseDelete(
   env: Env,
   table: string,

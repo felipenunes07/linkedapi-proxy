@@ -15,10 +15,22 @@ interface KeyRow {
   key_hash: string;
   status: string;
 }
-const db: {
-  keys: KeyRow[];
-  tenant: { webhook_url: string | null; webhook_secret: string | null };
-} = { keys: [], tenant: { webhook_url: null, webhook_secret: null } };
+// client_webhooks (F2.43): o /v1/webhook opera no webhook mais antigo.
+interface WebhookRow {
+  id: string;
+  tenant_id: string;
+  name: string;
+  url: string;
+  secret: string;
+  events: string[];
+  created_at: string;
+}
+const db: { keys: KeyRow[]; webhooks: WebhookRow[] } = { keys: [], webhooks: [] };
+const doTenant = (filters: Record<string, string>) =>
+  db.webhooks.filter(
+    (w) =>
+      filters.tenant_id === `eq.${w.tenant_id}` && (!filters.id || filters.id === `eq.${w.id}`),
+  );
 
 vi.mock('../src/lib/supabase', () => ({
   supabaseSelect: vi.fn(
@@ -30,13 +42,11 @@ vi.mock('../src/lib/supabase', () => ({
           .map((k) => ({ tenant_id: k.tenant_id }));
       }
       if (table === 'tenants') {
-        if (filters.id === 'eq.tA') {
-          if (filters.select === 'webhook_url') {
-            return [{ webhook_url: db.tenant.webhook_url }];
-          }
-          return [{ id: 'tA' }];
-        }
-        return [];
+        return filters.id === 'eq.tA' ? [{ id: 'tA' }] : [];
+      }
+      if (table === 'client_webhooks') {
+        const rows = doTenant(filters).sort((a, b) => a.created_at.localeCompare(b.created_at));
+        return filters.limit ? rows.slice(0, Number(filters.limit)) : rows;
       }
       if (table === 'connected_accounts') {
         if (filters.tenant_id === 'eq.tA') return [{ unipile_account_id: 'acct-A' }];
@@ -54,6 +64,15 @@ vi.mock('../src/lib/supabase', () => ({
           status: row.status as string,
         });
         return [{ id: `k-${db.keys.length}` }];
+      }
+      if (table === 'client_webhooks') {
+        const novo = {
+          id: `wh-${db.webhooks.length + 1}`,
+          created_at: new Date(Date.UTC(2026, 8, 1, 0, 0, db.webhooks.length)).toISOString(),
+          ...row,
+        } as WebhookRow;
+        db.webhooks.push(novo);
+        return [{ ...novo }];
       }
       return [];
     },
@@ -73,13 +92,19 @@ vi.mock('../src/lib/supabase', () => ({
         for (const row of rows) Object.assign(row, patch);
         return rows;
       }
-      if (table === 'tenants' && filters.id === 'eq.tA') {
-        Object.assign(db.tenant, patch);
-        return [db.tenant];
+      if (table === 'client_webhooks') {
+        const rows = doTenant(filters);
+        for (const row of rows) Object.assign(row, patch);
+        return rows;
       }
       return [];
     },
   ),
+  supabaseDelete: vi.fn(async (_env: Env, table: string, filters: Record<string, string>) => {
+    if (table !== 'client_webhooks') return;
+    const alvo = new Set(doTenant(filters));
+    db.webhooks = db.webhooks.filter((w) => !alvo.has(w));
+  }),
 }));
 
 vi.mock('../src/lib/unipile', () => ({
@@ -120,8 +145,20 @@ beforeEach(async () => {
   db.keys = [
     { tenant_id: 'tA', key_hash: await hashApiKey(KEY_A), status: 'active' },
   ];
-  db.tenant = { webhook_url: null, webhook_secret: null };
+  db.webhooks = [];
 });
+
+function webhookDeA(url: string, secret: string): WebhookRow {
+  return {
+    id: 'wh-a',
+    tenant_id: 'tA',
+    name: 'Webhook principal',
+    url,
+    secret,
+    events: ['message.received', 'account.disconnected', 'account.reconnected'],
+    created_at: '2026-08-01T00:00:00.000Z',
+  };
+}
 
 describe('POST /v1/keys/rotate', () => {
   it('emite chave nova, revoga a usada, e a nova autentica', async () => {
@@ -153,8 +190,23 @@ describe('/v1/webhook (configuracao do webhook do tenant)', () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { data: { secret: string; url: string } };
     expect(body.data.secret).toMatch(/^lk_whsec_[0-9a-f]{64}$/);
-    expect(db.tenant.webhook_url).toBe('https://cliente.example.com/hook');
-    expect(db.tenant.webhook_secret).toBe(body.data.secret);
+    // Sem webhook ainda: nasce o principal, com os eventos do endpoint unico.
+    expect(db.webhooks).toHaveLength(1);
+    expect(db.webhooks[0]).toMatchObject({
+      tenant_id: 'tA',
+      url: 'https://cliente.example.com/hook',
+      secret: body.data.secret,
+      events: ['message.received', 'account.disconnected', 'account.reconnected'],
+    });
+  });
+
+  it('PUT de novo troca a URL do principal (nao cria outro) e gera secret novo', async () => {
+    db.webhooks = [webhookDeA('https://antigo.example.com/hook', 'lk_whsec_velho')];
+    const res = await req('PUT', '/v1/webhook', KEY_A, { url: 'https://novo.example.com/hook' });
+    expect(res.status).toBe(200);
+    expect(db.webhooks).toHaveLength(1);
+    expect(db.webhooks[0]!.url).toBe('https://novo.example.com/hook');
+    expect(db.webhooks[0]!.secret).not.toBe('lk_whsec_velho');
   });
 
   it.each([
@@ -169,12 +221,11 @@ describe('/v1/webhook (configuracao do webhook do tenant)', () => {
     const res = await req('PUT', '/v1/webhook', KEY_A, { url });
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: 'invalid_url' });
-    expect(db.tenant.webhook_url).toBeNull();
+    expect(db.webhooks).toEqual([]);
   });
 
   it('GET mostra a url mas NUNCA o secret', async () => {
-    db.tenant.webhook_url = 'https://cliente.example.com/hook';
-    db.tenant.webhook_secret = 'lk_whsec_super_secreto';
+    db.webhooks = [webhookDeA('https://cliente.example.com/hook', 'lk_whsec_super_secreto')];
     const res = await req('GET', '/v1/webhook', KEY_A);
     expect(res.status).toBe(200);
     const text = await res.text();
@@ -186,11 +237,9 @@ describe('/v1/webhook (configuracao do webhook do tenant)', () => {
   });
 
   it('DELETE remove a configuracao', async () => {
-    db.tenant.webhook_url = 'https://cliente.example.com/hook';
-    db.tenant.webhook_secret = 'lk_whsec_x';
+    db.webhooks = [webhookDeA('https://cliente.example.com/hook', 'lk_whsec_x')];
     const res = await req('DELETE', '/v1/webhook', KEY_A);
     expect(res.status).toBe(200);
-    expect(db.tenant.webhook_url).toBeNull();
-    expect(db.tenant.webhook_secret).toBeNull();
+    expect(db.webhooks).toEqual([]);
   });
 });

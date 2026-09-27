@@ -12,9 +12,26 @@ Onde fica cada coisa:
 - Backend: Cloudflare Workers na conta do Victor,
   https://linkedapi-proxy.victor-58a.workers.dev (`npm run deploy`).
 - Nome do produto: "Playbook API" e PROVISORIO. Contato publicado:
-  victor@playbooklab.com.br.
+  contato@playbooklab.com.br.
 
 ---
+
+## 00. Webhooks por evento (F2.43): falta subir
+
+O painel ganhou o "Criar webhook" em 3 passos, como na Unipile. Para ligar,
+nesta ordem (detalhe em [docs/pendencias.md](docs/pendencias.md), secao F2.43):
+
+1. Migration 0014 no SQL Editor do Supabase.
+2. `npm run deploy` logo em seguida.
+3. Na Unipile: apagar o webhook `linkedapi-message-received` e rodar
+   `npm run webhook:register -- messaging` de novo (agora com os 6 eventos).
+4. Gerar `USERS_HOOK_SECRET`, subir com `npx wrangler secret put
+   USERS_HOOK_SECRET` e rodar `npm run webhook:register -- users` (convite
+   aceito).
+5. Push da landing (o painel novo).
+
+Sem os passos 3 e 4, o cliente consegue escolher os eventos novos mas eles
+nunca chegam; mensagem nova e conexao caida seguem funcionando.
 
 ## 0. Preco novo e assentos: NO AR em 2026-09-13
 
@@ -150,7 +167,7 @@ Duas observacoes da tela, para decidir depois:
   `playbooklab.com.br` verificado (regiao Sao Paulo), DKIM, SPF e DMARC no ar
   e o SPF da raiz mantendo o Google Workspace junto do novo remetente. A
   `RESEND_API_KEY` e secret; o `EMAIL_FROM` saiu do cofre e virou var no
-  `wrangler.jsonc` (`Playbook API <victor@playbooklab.com.br>`), porque ele
+  `wrangler.jsonc` (`Playbook API <contato@playbooklab.com.br>`), porque ele
   viaja no cabecalho de todo e-mail e nao e segredo. `POST /portal/login`
   responde 200 (com e-mail desligado ele responde 503).
   Falta so o envio real, que sai junto do primeiro pagamento de teste.

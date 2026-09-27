@@ -18,7 +18,10 @@ export async function unipileFetch(
   headers.set('accept', 'application/json');
 
   try {
-    return await fetch(url, { ...init, headers });
+    // redirect manual: a origem nao redireciona (medido em 2026-09-22), e
+    // seguir um 3xx levaria o master token no header para outro host. Um
+    // 3xx chega como resposta nao-ok e vira upstream_error.
+    return await fetch(url, { ...init, headers, redirect: 'manual' });
   } catch {
     // Erro do runtime carregaria a URL completa (com o DSN) na message, que
     // acabaria no log do onError. Regra #2: DSN nunca em log.
@@ -36,10 +39,13 @@ export function sendMessage(
   chatId: string,
   text: string,
   accountId: string,
+  attachments: File[] = [],
 ): Promise<Response> {
   const form = new FormData();
-  form.set('text', text);
+  // Texto vazio so acontece quando a mensagem e so anexo.
+  if (text.length > 0) form.set('text', text);
   form.set('account_id', accountId);
+  for (const arquivo of attachments) form.append('attachments', arquivo, arquivo.name);
   // Nao setar content-type: o FormData define multipart + boundary sozinho.
   return unipileFetch(env, `/chats/${encodeURIComponent(chatId)}/messages`, {
     method: 'POST',
@@ -114,10 +120,65 @@ export function getAccount(env: Env, accountId: string): Promise<Response> {
 export function listChats(
   env: Env,
   accountId: string,
-  opts: { limit?: string; cursor?: string } = {},
+  opts: { limit?: string; cursor?: string; unread?: string; before?: string; after?: string } = {},
 ): Promise<Response> {
   const qs = new URLSearchParams({ account_id: accountId });
   if (opts.limit !== undefined) qs.set('limit', opts.limit);
   if (opts.cursor !== undefined) qs.set('cursor', opts.cursor);
+  if (opts.unread !== undefined) qs.set('unread', opts.unread);
+  if (opts.before !== undefined) qs.set('before', opts.before);
+  if (opts.after !== undefined) qs.set('after', opts.after);
   return unipileFetch(env, `/chats?${qs.toString()}`, { method: 'GET' });
+}
+
+// ---------------------------------------------------------------------------
+// Chamadas genericas (F2.41). Os endpoints novos montam o path e escolhem, um
+// a um, os parametros que repassam: NUNCA se espalha o query/corpo do cliente
+// direto aqui. O account_id entra so pelo argumento `query`/corpo montado na
+// rota a partir do tenant resolvido. Tudo continua passando por unipileFetch,
+// o unico ponto que injeta o master token.
+
+export type Consulta = Record<string, string | string[] | undefined>;
+
+function comConsulta(path: string, query: Consulta = {}): string {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(query)) {
+    if (v === undefined) continue;
+    if (Array.isArray(v)) {
+      for (const item of v) qs.append(k, item);
+    } else {
+      qs.set(k, v);
+    }
+  }
+  const texto = qs.toString();
+  return texto ? `${path}?${texto}` : path;
+}
+
+export function unipileGet(env: Env, path: string, query?: Consulta): Promise<Response> {
+  return unipileFetch(env, comConsulta(path, query), { method: 'GET' });
+}
+
+export function unipileJson(
+  env: Env,
+  method: 'POST' | 'PATCH' | 'PUT' | 'DELETE',
+  path: string,
+  body?: Record<string, unknown>,
+  query?: Consulta,
+): Promise<Response> {
+  const init: RequestInit = { method };
+  if (body !== undefined) {
+    init.headers = { 'content-type': 'application/json' };
+    init.body = JSON.stringify(body);
+  }
+  return unipileFetch(env, comConsulta(path, query), init);
+}
+
+export function unipileForm(
+  env: Env,
+  path: string,
+  form: FormData,
+  query?: Consulta,
+): Promise<Response> {
+  // Sem content-type: o FormData define multipart + boundary sozinho.
+  return unipileFetch(env, comConsulta(path, query), { method: 'POST', body: form });
 }

@@ -2,13 +2,20 @@
 //
 //   npm run webhook:register -- account-status
 //   npm run webhook:register -- messaging
+//   npm run webhook:register -- users
 //
 // Registra na Unipile um webhook apontando para o Worker publico
-// ({PUBLIC_BASE_URL}/hooks/account-status ou /hooks/message-received), com o
-// secret compartilhado no header x-hook-secret. O Worker so aceita o hook se o
-// MESMO secret estiver configurado no env dele (fail-closed).
+// ({PUBLIC_BASE_URL}/hooks/account-status, /hooks/message-received ou
+// /hooks/relation), com o secret compartilhado no header x-hook-secret. O
+// Worker so aceita o hook se o MESMO secret estiver configurado no env dele
+// (fail-closed).
 //
-// Os secrets (ACCOUNT_STATUS_HOOK_SECRET / MESSAGE_HOOK_SECRET) vem de
+// F2.43: `messaging` pede TODOS os eventos de mensagem (o cliente escolhe no
+// painel quais recebe; o filtro e nosso). Um webhook `messaging` registrado
+// antes disso precisa ser apagado no dashboard da Unipile e registrado de novo.
+//
+// Os secrets (ACCOUNT_STATUS_HOOK_SECRET / MESSAGE_HOOK_SECRET /
+// USERS_HOOK_SECRET) vem de
 // .dev.vars. Se ainda nao existirem: gere um valor com
 //   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 // grave no .dev.vars E em producao (npx wrangler secret put <NOME>), e rode
@@ -20,6 +27,8 @@ interface HookConfig {
   path: string;
   secretVar: string;
   name: string;
+  // Eventos pedidos a origem. Sem a lista, vale o default da Unipile.
+  events?: string[];
 }
 
 const HOOKS: Record<string, HookConfig> = {
@@ -34,6 +43,21 @@ const HOOKS: Record<string, HookConfig> = {
     path: '/hooks/message-received',
     secretVar: 'MESSAGE_HOOK_SECRET',
     name: 'linkedapi-message-received',
+    events: [
+      'message_received',
+      'message_read',
+      'message_reaction',
+      'message_edited',
+      'message_deleted',
+      'message_delivered',
+    ],
+  },
+  users: {
+    source: 'users',
+    path: '/hooks/relation',
+    secretVar: 'USERS_HOOK_SECRET',
+    name: 'linkedapi-new-relation',
+    events: ['new_relation'],
   },
 };
 
@@ -62,6 +86,7 @@ async function register(kind: string): Promise<void> {
       source: config.source,
       request_url: `${publicBaseUrl}${config.path}`,
       name: config.name,
+      ...(config.events ? { events: config.events } : {}),
       headers: [{ key: 'x-hook-secret', value: secret }],
     }),
   });

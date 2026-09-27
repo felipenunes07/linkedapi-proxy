@@ -22,6 +22,8 @@ export interface Env {
   ACCOUNT_STATUS_HOOK_SECRET?: string;
   // Secret do hook de mensagem recebida (idem).
   MESSAGE_HOOK_SECRET?: string;
+  // Secret do hook de conexao nova (webhook `users` da origem, F2.43; idem).
+  USERS_HOOK_SECRET?: string;
   // Token que o Asaas devolve no header asaas-access-token do webhook de cobranca.
   ASAAS_HOOK_TOKEN?: string;
   // Chave da API do Asaas (conta financeira). Sem ela, POST /checkout responde
@@ -59,9 +61,22 @@ export interface Env {
   EMAIL_FROM?: string;
 }
 
-// Acoes de escrita sujeitas a rate limit. Sao as que restringem contas no
-// LinkedIn (enviar mensagem, enviar convite). Listar chats e leitura, sem limite.
-export type RateLimitAction = 'messages' | 'invitations';
+// Acoes sujeitas a rate limit. Na V1 eram so as escritas que restringem contas
+// no LinkedIn (enviar mensagem, enviar convite). Na expansao (F2.41) entra
+// cada familia de chamada que toca o LinkedIn ao vivo; ver lib/limits.ts.
+// Ler conversa (chats, mensagens, participantes) segue sem limite.
+export type RateLimitAction =
+  | 'messages'
+  | 'invitations'
+  | 'profile_views'
+  | 'search_results'
+  | 'network_reads'
+  | 'content_reads'
+  | 'invitation_responses'
+  | 'reactions'
+  | 'comments'
+  | 'posts'
+  | 'chat_actions';
 
 // Corpo aceito por POST /v1/messages. IMPORTANT: nao ha campo account_id aqui;
 // se o cliente mandar um, e ignorado (o valor real vem do tenant, no servidor).
@@ -90,6 +105,15 @@ export interface Tenant {
   // Hash da chave usada nesta request (para rotacao/last_used_at; o valor em
   // claro nunca fica no contexto).
   keyHash: string;
+  // Tenant DONO da chave. E o mesmo que tenantId, salvo quando a request pede
+  // outra conta do grupo com `account_id` (F2.42): ai tenantId e o da conta
+  // escolhida (limite, cota, webhook) e keyTenantId segue sendo o da chave
+  // (rotacao, last_used_at).
+  keyTenantId: string;
+  // O `account_id` publico (acc_...) quando a request escolheu OUTRA conta do
+  // grupo; null quando age a conta da propria chave. Para links que a
+  // resposta devolve (ex.: download de anexo) repetirem a escolha.
+  accountIdEscolhido: string | null;
 }
 
 // Variaveis por-request do Hono (context.var).
